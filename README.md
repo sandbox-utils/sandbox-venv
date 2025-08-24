@@ -118,6 +118,8 @@ is mounted read-only. In addition:
 
 * `"$venv/cache"` is bind-mounted as `"$HOME/.cache"`
 * `"$HOME/.cache/pip"` is bind-mounted as `"$HOME/.cache/pip"`
+  (only if environment variable `SANDBOX_USE_PIP_CACHE=` is set as this may
+  enable cache poisoning attachs).
 
 To mount extra endpoints, use Bubblewrap switches `--bind` or `--bind-ro`.
 Anything else not explicitly mounted by an extra CLI switch

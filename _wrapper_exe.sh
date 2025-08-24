@@ -143,11 +143,13 @@ set -- --bind "$proj_dir" "$proj_dir" "$@"
 home="${HOME:-"/home/$USER"}"
 pip_cache="$home/${XDG_CACHE_HOME:-.cache}/pip"
 mkdir -p "$venv/cache" "$pip_cache"
-mkdir -p "$venv/cache/pip" &&
-    echo "This is an artefact of Bubblewrap bind mounting. Real pip cache is in \$HOME/.cache/pip" \
-    > "$venv/cache/pip/note.txt"
-set -- --bind "$venv/cache" "$home/.cache" \
-       --bind "$pip_cache" "$home/.cache/pip" "$@"
+[ ! "${SANDBOX_USE_PIP_CACHE-}" ] || {
+    mkdir -p "$venv/cache/pip" &&
+        echo "This dir is an artefact of Bubblewrap bind mounting. Real pip cache is in \$HOME/.cache/pip" \
+        > "$venv/cache/pip/note.txt"
+    set -- --bind "$pip_cache" "$home/.cache/pip" "$@"
+}
+set -- --bind "$venv/cache" "$home/.cache" "$@"
 
 # Pass our own redacted copy of env
 for var in $(env | grep -E '^(USER|LOGNAME|UID|PATH|TERM|LANGUAGE|LANG|LC_.*?|HOSTNAME)='); do
