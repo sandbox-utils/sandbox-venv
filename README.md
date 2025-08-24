@@ -57,14 +57,14 @@ Installation
 There are **no dependencies other than a POSIX shell** with
 [its standard set of utilities](https://en.wikipedia.org/wiki/List_of_POSIX_commands)
 **and `bubblewrap`**.
-The installation instructions, as well as the script runtime,
-should work similarly on all relevant compute platforms,
+The installation process, as well as the script runtime,
+should behave similarly on all relevant compute platforms,
 including GNU/Linux and even
 [Windos/WSL](https://learn.microsoft.com/en-us/windows/wsl/install). 🤞
 
 ```shell
-# Install required dependencies, e.g.
-sudo apt install binutils bubblewrap python3
+# Install the few, unlikely to be missing dependencies, e.g.
+sudo apt install coreutils binutils bubblewrap libseccomp python3
  
 # Download the script and put it somewhere on PATH
 curl -vL 'https://bit.ly/sandbox-venv' | sudo tee /usr/local/bin/sandbox-venv
@@ -126,6 +126,21 @@ Anything else not explicitly mounted by an extra CLI switch
 is lost upon container termination.
 
 
+#### Linux Seccomp
+
+Linux kernel `seccomp` facility for restricting syscalls is
+**automatically enabled when the appropriate package is
+available**—`apt install libseccomp2 python3-seccomp` (requires virtualenv with `--system-site-packages`)
+or `pip install pyseccomp` (also requires `libseccomp2`).
+The initializing module `sitecustomize.py` installs a filter
+that thereafter only allows syscalls listed in the environment variable
+`SANDBOX_SECCOMP_ALLOW=`
+(or, by default, some 200 syscalls that should cover all non-special cases).
+You can populate the variable at runtime with a custom, stricter syscalls list
+or set it to blank
+(i.e. `export SANDBOX_SECCOMP_ALLOW=`) to force-disable seccomp completely.
+
+
 #### Runtime monitoring
 
 If **environment variable `VERBOSE=`** is set to a non-empty value,
@@ -159,7 +174,13 @@ Viable alternatives
    [<del>Red Hat</del><ins>IBM</ins> has a reasonable position on](https://github.com/containers/bubblewrap?tab=readme-ov-file#related-project-comparison-firejail))
    that sets up its own sandbox. I guess it's a matter of trust.
    Similarly to AppArmor, requires writing a custom profile.
-4. On macOS, [`sandbox-exec`](https://igorstechnoclub.com/sandbox-exec/)
+4. A custom
+   [`seccomp` initialization script](https://healeycodes.com/running-untrusted-python-code),
+   executed at interpreter startup using
+   [~~`PYTHONSTARTUP=`~~](https://docs.python.org/3/using/cmdline.html#envvar-PYTHONSTARTUP)
+   [`sitecustomize`](https://docs.python.org/3/library/site.html#module-sitecustomize)
+   startup hook.
+5. On macOS, [`sandbox-exec`](https://igorstechnoclub.com/sandbox-exec/)
    or Apple Containerization®.
 
 In comparison to the above, `sandbox-venv` is like `chroot` on steroids.
