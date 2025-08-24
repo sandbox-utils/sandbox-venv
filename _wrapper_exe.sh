@@ -36,8 +36,10 @@ executables="
     /bin/env
     /bin/ls
     /bin/sh
+
     /bin/uname
-    "
+    /sbin/ldconfig
+"
 
 case $- in *x*) xtrace=-x ;; *) xtrace=+x ;; esac; set +x
 
@@ -69,7 +71,12 @@ py_libs="
     /usr/include/python3*
     /usr/lib/python3*
     /usr/lib64/python3*
-    /usr/local/lib/python3*"
+    /usr/local/lib/python3*
+
+    /usr/lib/python3*/*/seccomp.*.so
+    /usr/lib/*/libseccomp.so*
+    /usr/lib64/libseccomp.so*
+"
 git_libs="
     /usr/lib*/git-core
 "
@@ -86,7 +93,7 @@ ro_bind_extra="
     /etc/pki
     /etc/ssl
     /usr/share/pki*
-    "
+"
 
 collect="
     $collect
@@ -184,4 +191,5 @@ exec bwrap \
     --setenv HOME "$home" \
     --setenv USER "user" \
     --setenv VIRTUAL_ENV "$venv" \
+    --setenv PYTHONPATH "$venv/sandbox:${PYTHONPATH-}" \
     "$@"

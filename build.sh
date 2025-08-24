@@ -6,12 +6,12 @@ script_file="sandbox-venv.sh"
 out="build/${script_file%.sh}"
 {
     cat "$script_file"
-    appendix_cnt=1
-    for appendix in _wrapper_pip _wrapper_exe; do
+    i=1
+    for appendix in _wrapper_pip.sh _wrapper_exe.sh sitecustomize.py; do
         printf '\n\n'
-        echo "# CUT HERE ------------------- Appendix $appendix_cnt: sandbox-venv $appendix.sh script"
-        cat "$appendix.sh"
-        appendix_cnt=$((appendix_cnt + 1))
+        echo "# CUT HERE ------------------- Appendix $i: sandbox-venv $appendix script"
+        cat "$appendix"
+        i=$((i + 1))
     done
 } > "$out"
 chmod +x "$out"

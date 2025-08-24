@@ -89,10 +89,15 @@ wrap_all () (
         echo "$file"
     done
 
+    # Install $venv/bin/shell
     file="$(realpath "$bin/shell")"
     add_bin_shell "$file"
     chmod +x "$file"
     echo "$file"
+
+    # Install PYTHONPATH=$venv/sandbox with sitecustomize.py
+    mkdir -p "$bin/../sandbox"
+    extract_segment 3 "$@" > "$bin/../sandbox/sitecustomize.py"
 )
 
 wrap_all "$@"

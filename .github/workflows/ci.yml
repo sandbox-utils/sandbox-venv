@@ -23,9 +23,11 @@ jobs:
           # Alternative:
           # sudo sysctl -w kernel.apparmor_restrict_unprivileged_unconfined=1
           # sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=1
-      - run: sudo apt-get install bubblewrap
+      - run: sudo apt-get install bubblewrap libseccomp2 tree
+      - run: sudo ldconfig --verbose
       - run: time bash tests/smoke-test.sh
       - run: time bash tests/test-bwrap-opts.sh
+      - run: time bash tests/test-seccomp.sh
 
   workflow-keepalive:
     if: github.event_name == 'schedule'
