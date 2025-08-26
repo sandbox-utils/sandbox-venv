@@ -27,10 +27,9 @@ _BWRAP_DEFAULT_ARGS=
 executables="
     /usr/bin/python3
 
-    /usr/bin/git
-    /usr/bin/git-receive-pack
-    /usr/bin/git-upload-archive
-    /usr/bin/git-upload-pack
+    /usr/bin*/git
+    /usr/bin/git-receive-*
+    /usr/bin/git-upload-*
 
     /bin/bash
     /bin/env
@@ -72,7 +71,8 @@ py_libs="
     /usr/lib/python3*
     /usr/lib64/python3*
     /usr/local/lib/python3*
-
+"
+seccomp_libs="
     /usr/lib/python3*/*/seccomp.*.so
     /usr/lib/*/libseccomp.so*
     /usr/lib64/libseccomp.so*
@@ -90,7 +90,7 @@ ro_bind_extra="
     /usr/share/zoneinfo
 
     /usr/share/ca-certificates*
-    /etc/pki
+    /etc/pki*
     /etc/ssl
     /usr/share/pki*
 "
@@ -98,6 +98,7 @@ ro_bind_extra="
 collect="
     $collect
     $ro_bind_extra
+    $seccomp_libs
     $git_libs
     $py_libs"
 
