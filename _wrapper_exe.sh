@@ -43,8 +43,8 @@ case $- in *x*) xtrace=-x ;; *) xtrace=+x ;; esac; set +x
 
 # Collect binaries' lib dependencies
 lib_deps () {
-    { readelf -l "$1" 2>/dev/null || true; } | awk '/interpreter/ {print $NF}' | tr -d '[]'
-    { ldd "$1" 2>/dev/null || true; } | awk '/=>/ { print $3 }' | { grep -E '^/' || true; }
+    readelf -l "$1" | awk '/interpreter/ {print $NF}' | tr -d '[]'
+    ldd "$1" | awk '/=>/ { print $3 }' | { grep -E '^/' || true; }
 }
 collect="$executables"
 for exe in $executables; do
