@@ -89,10 +89,15 @@ wrap_all () (
         echo "$file"
     done
 
+    # Install $venv/bin/shell
     file="$(realpath "$bin/shell")"
     add_bin_shell "$file"
     chmod +x "$file"
     echo "$file"
+
+    # Install PYTHONPATH=$venv/sandbox with sitecustomize.py
+    mkdir -p "$bin/../sandbox"
+    extract_segment 3 "$@" > "$bin/../sandbox/sitecustomize.py"
 )
 
 wrap_all "$@"
@@ -173,26 +178,31 @@ _BWRAP_DEFAULT_ARGS=
 
 # Expose these binaries
 executables="
+    /usr/bin/python
     /usr/bin/python3
+    /usr/bin/python3*
 
-    /usr/bin/git
-    /usr/bin/git-receive-pack
-    /usr/bin/git-upload-archive
-    /usr/bin/git-upload-pack
+    /usr/bin*/git
+    /usr/bin/git-receive-*
+    /usr/bin/git-upload-*
 
     /bin/bash
     /bin/env
     /bin/ls
     /bin/sh
+
     /bin/uname
-    "
+    /sbin/ldconfig*
+"
 
 case $- in *x*) xtrace=-x ;; *) xtrace=+x ;; esac; set +x
 
 # Collect binaries' lib dependencies
+for dep in readelf ldd; do command -v "$dep" >/dev/null 2>&1 || { warn "Missing executable: $dep"; exit 1; }; done
 lib_deps () {
-    { readelf -l "$1" 2>/dev/null || true; } | awk '/interpreter/ {print $NF}' | tr -d '[]'
-    { ldd "$1" 2>/dev/null || true; } | awk '/=>/ { print $3 }' | { grep -E '^/' || true; }
+    readelf -l "$1" >/dev/null 2>&1 || return 0  # Not a binary file
+    readelf -l "$1" | awk '/interpreter/ {print $NF}' | tr -d '[]'
+    ldd "$1" | awk '/=>/ { print $3 }' | { grep -E '^/' || true; }
 }
 collect="$executables"
 for exe in $executables; do
@@ -215,7 +225,13 @@ py_libs="
     /usr/include/python3*
     /usr/lib/python3*
     /usr/lib64/python3*
-    /usr/local/lib/python3*"
+    /usr/local/lib/python3*
+"
+seccomp_libs="
+    /usr/lib/python3*/*/seccomp.*.so
+    /usr/lib/*/libseccomp.so*
+    /usr/lib64/libseccomp.so*
+"
 git_libs="
     /usr/lib*/git-core
 "
@@ -229,14 +245,15 @@ ro_bind_extra="
     /usr/share/zoneinfo
 
     /usr/share/ca-certificates*
-    /etc/pki
+    /etc/pki*
     /etc/ssl
     /usr/share/pki*
-    "
+"
 
 collect="
     $collect
     $ro_bind_extra
+    $seccomp_libs
     $git_libs
     $py_libs"
 
@@ -291,11 +308,13 @@ set -- --bind "$proj_dir" "$proj_dir" "$@"
 home="${HOME:-"/home/$USER"}"
 pip_cache="$home/${XDG_CACHE_HOME:-.cache}/pip"
 mkdir -p "$venv/cache" "$pip_cache"
-mkdir -p "$venv/cache/pip" &&
-    echo "This is an artefact of Bubblewrap bind mounting. Real pip cache is in \$HOME/.cache/pip" \
-    > "$venv/cache/pip/note.txt"
-set -- --bind "$venv/cache" "$home/.cache" \
-       --bind "$pip_cache" "$home/.cache/pip" "$@"
+[ ! "${SANDBOX_USE_PIP_CACHE-}" ] || {
+    mkdir -p "$venv/cache/pip" &&
+        echo "This dir is an artefact of Bubblewrap bind mounting. Real pip cache is in \$HOME/.cache/pip" \
+        > "$venv/cache/pip/note.txt"
+    set -- --bind "$pip_cache" "$home/.cache/pip" "$@"
+}
+set -- --bind "$venv/cache" "$home/.cache" "$@"
 
 # Pass our own redacted copy of env
 for var in $(env | grep -E '^(USER|LOGNAME|UID|PATH|TERM|LANGUAGE|LANG|LC_.*?|HOSTNAME)='); do
@@ -328,4 +347,132 @@ exec bwrap \
     --setenv HOME "$home" \
     --setenv USER "user" \
     --setenv VIRTUAL_ENV "$venv" \
+    --setenv PYTHONPATH "$venv/sandbox:${PYTHONPATH-}" \
     "$@"
+
+
+# CUT HERE ------------------- Appendix 3: sandbox-venv sitecustomize.py script
+#!/usr/bin/python3
+"""
+Importing this module inits seccomp/pyseccomp, restricting allowed syscalls to those
+listed in SANDBOX_SECCOMP_ALLOW environment variable (or, by default, the list below).
+The module is imported automatically upon startup when on PYTHONPATH.
+
+https://docs.python.org/3/library/site.html#module-sitecustomize
+"""
+import os
+import re
+import sys
+
+# XXX: You can debug this list (e.g. update missing items) by
+#  looking for EPERM in `strace -f` output.
+ALLOW_SYSCALLS = [
+    # Process & signals
+    "clone", "clone3", "fork", "vfork", "execve", "exit", "exit_group",
+    "kill", "tgkill", "tkill", "wait4", "getpid", "getppid", "gettid",
+    "prctl", "arch_prctl", "getpgrp",
+    "pidfd_open", "pidfd_send_signal",
+    "sigaction", "sigreturn",
+    "rt_sigaction", "rt_sigreturn",
+    "rt_sigprocmask", "rt_sigpending", "rt_sigsuspend",
+    "sigaltstack", "rseq", "process_madvise",
+
+    # File I/O
+    "open", "openat", "close", "close_range", "read", "write",
+    "name_to_handle_at",
+    "pread64", "pwrite64", "preadv", "pwritev", "preadv2", "pwritev2",
+    "lseek",
+    "stat", "statx", "fstat", "lstat", "fstatat64", "newfstatat",
+    "stat64", "lstat64", "fstat64", "fadvise64",
+    "faccessat2", "getdents", "getdents64", "access",
+    "unlink", "unlinkat", "mkdir", "mkdirat", "rmdir",
+    "rename", "renameat", "renameat2",
+    "readlink", "readlinkat", "symlink", "symlinkat", "link", "linkat",
+    "truncate", "ftruncate", "utime", "utimes", "futimesat", "utimensat",
+    "chown", "fchown", "lchown", "fchmod", "fchmodat", "chmod", "mknod", "mknodat",
+    "getxattr", "setxattr", "listxattr", "removexattr",
+
+    # fd ops
+    "dup", "dup2", "dup3", "pipe", "pipe2",
+    "fcntl", "flock", "fsync", "fdatasync",
+    "readahead",
+    "splice", "tee", "vmsplice",
+
+    # mmap / mem / threads
+    "brk", "mmap", "mmap2", "munmap", "mremap", "mprotect", "madvise", "mincore",
+    "futex", "futex_time64", "futex_waitv", "set_tid_address", "set_robust_list", "get_robust_list",
+    "sched_yield", "sched_getaffinity",
+    "mlock", "munlock", "mlockall", "munlockall",
+    "get_mempolicy", "set_mempolicy", "mbind", "migrate_pages", "move_pages",
+    "membarrier",
+
+    # Time / clocks
+    "nanosleep", "clock_gettime", "clock_getres", "gettimeofday", "time",
+    "clock_nanosleep", "clock_gettime64",
+    "timer_create", "timer_settime", "timer_gettime", "timer_delete",
+    "setitimer", "getitimer", "times",
+    "timerfd_create", "timerfd_settime", "timerfd_gettime",
+
+    # Networking
+    "socket", "socketpair", "socketcall", "bind", "listen",
+    "accept", "accept4", "connect",
+    "getsockname", "getpeername",
+    "sendto", "recvfrom", "sendmsg", "recvmsg", "shutdown",
+    "setsockopt", "getsockopt",
+    "recvmmsg", "sendmmsg",
+    "sendfile", "sendfile64",
+
+    # epoll/poll/select
+    "epoll_create", "epoll_create1", "epoll_ctl", "epoll_wait",
+    "epoll_pwait", "epoll_pwait2",
+    "poll", "ppoll", "ppoll_time64", "select", "pselect6",
+    "eventfd", "eventfd2",
+
+    # Descriptors / metadata
+    "ioctl", "readv", "writev",
+    "getcwd", "chdir", "fchdir",
+    "statfs", "fstatfs", "statfs64", "fstatfs64",
+
+    # UIDs/GIDs (read + drop privileges)
+    "getuid", "geteuid", "getgid", "getegid", "getgroups",
+    "getresuid", "getresgid", "setresuid", "setresgid", "setreuid", "setregid",
+    "setuid", "setgid",
+
+    # Limits / info
+    "getrlimit", "setrlimit", "prlimit64", "uname", "sysinfo", "getrusage", "umask",
+
+    # Random
+    "getrandom",
+
+    # Misc
+    "seccomp", "capget",
+    "shmget", "shmat", "shmdt", "shmctl",
+]
+
+
+try:
+    allow_syscalls = re.findall(r'\w+', os.environ['SANDBOX_SECCOMP_ALLOW'])
+except KeyError:
+    allow_syscalls = ALLOW_SYSCALLS
+
+if allow_syscalls:
+    try:
+        import seccomp
+    except ImportError:
+        try:
+            import pyseccomp as seccomp
+        except ImportError:
+            seccomp = None
+            if sys.platform.startswith('linux'):
+                print("sandbox-venv/seccomp: Python package 'seccomp' (or 'pyseccomp') "
+                      "not available. If you want seccomp support, apt install python3-seccomp "
+                      "(requires venv created with --system-site-packages) "
+                      "or pip install pyseccomp.", file=sys.stderr)
+    if seccomp:
+        print(f'sandbox-venv/seccomp: allowing {len(allow_syscalls)} syscalls', file=sys.stderr)
+        default_action = seccomp.ERRNO(seccomp.errno.EPERM)  # EPERM, Operation not permitted
+        filter = seccomp.SyscallFilter(default_action)
+        for syscall in allow_syscalls:
+            # print(syscall, file=sys.stderr)
+            filter.add_rule(seccomp.ALLOW, syscall)
+        filter.load()
