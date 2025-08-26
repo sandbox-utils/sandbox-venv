@@ -38,7 +38,7 @@ executables="
     /bin/sh
 
     /bin/uname
-    /sbin/ldconfig
+    /sbin/ldconfig*
 "
 
 case $- in *x*) xtrace=-x ;; *) xtrace=+x ;; esac; set +x
