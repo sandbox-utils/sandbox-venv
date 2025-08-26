@@ -28,8 +28,8 @@ current user's credentials and personal bits like:
 * `~/.mozilla/firefox/<profile>/key4.db`,
 * `~/.mozilla/firefox/<profile>/formhistory.sqlite` ...
 
-<sub>✱ Installing something as seemingly harmless as the popular package _poetry_ pulls in
-[nearly a hundred dependencies or over 70 MB](doc/deps-stats.txt)
+<sub>✱ Installing something as seemingly harmless as the popular **package _poetry_**
+pulls in [nearly a hundred dependencies or over 70 MB](doc/deps-stats.txt)
 of Python sources! 😬</sub>
 
 In someone else's words:
@@ -64,7 +64,7 @@ including GNU/Linux and even
 
 ```shell
 # Install the few, unlikely to be missing dependencies, e.g.
-sudo apt install coreutils binutils bubblewrap libseccomp python3
+sudo apt install coreutils binutils bubblewrap libseccomp2 python3
  
 # Download the script and put it somewhere on PATH
 curl -vL 'https://bit.ly/sandbox-venv' | sudo tee /usr/local/bin/sandbox-venv
@@ -92,8 +92,8 @@ sets up and transparently runs in a secure container sandbox.
 
 #### Extra Bubblewrap arguments
 
-Other than the optional virtualenv dir, **all arguments initially passed to
-`sandbox-venv` are forwarded to bubblewrap**. See `bubblewrap --help` or
+Other than the optional virtualenv dir, **all arguments** initially passed to
+`sandbox-venv` are **forwarded to bubblewrap**. See `bubblewrap --help` or
 [`man 1 bwrap`](https://manpages.debian.org/unstable/bwrap). You can also pass additional bubblewrap arguments to individual
 process invocations via **`$BWRAP_ARGS` environment variable**. E.g.:
 
@@ -146,7 +146,8 @@ or set it to blank
 If **environment variable `VERBOSE=`** is set to a non-empty value,
 the full `bwrap` command line is emitted to stderr before execution.
 
-You can list bubblewraped processes using the command `lsns`
+You can list bubblewraped processes using the
+[command `lsns`](https://manpages.debian.org/unstable/lsns)
 or the following shell function:
 
 ```sh
@@ -156,6 +157,55 @@ list_bwrap  # Function call
 ```
 
 You can run `$venv/bin/shell` to spawn **interactive shell inside the sandbox**.
+
+
+Security Model
+--------------
+Entrypoints in `$venv/bin` are wrapped to `exec bwrap`
+so that every invocation runs inside a fresh Bubblewrap container.
+
+`$venv/bin/pip` wrapper re-wraps any newly created executables in `$venv/bin`,
+ensuring they always use the wrapped `$venv/bin/python`.
+
+Rather than giving the sandbox full filesystem access,
+minimal shared library (`*.so`) dependencies are collected and made available inside the container,
+as well as specific host binaries (e.g. `/usr/bin/python3`, `/usr/bin/git`, `/bin/sh` etc.)—actual
+runtime behavior depends on this list and which paths exist on the host.
+Most paths are mounted read-only, while the project directory
+(sans its `.venv`, `.git`) is mounted read-write.
+
+Optionally, a seccomp filter is installed at Python startup using the `sitecustomize` mechanism.
+The `BWRAP_ARGS=` environment variable lets you extend or relax the sandbox at runtime.
+
+Paths inside the sandbox mirror the host paths, potentially exposing your username,
+directory layout etc. This was done for simplicity—pull requests appreciated!
+
+```mermaid
+flowchart TB
+  Attacker[Malicious package /
+           rogue dependency]
+  Attacker -->|filesystem access| TryFS[try to read ~/.ssh, /etc,
+                                        or other host files]
+  TryFS -->|failure| FS
+  Attacker -->|use Linux syscalls| TrySys[call a forbidden /
+                                          privileged syscall]
+  TrySys -->|blocked| Seccomp[seccomp sandbox]
+  Attacker -->|network bind| TryNet[bind to a privileged port]
+  TryNet -->|optional| Caps
+
+  subgraph Mitigations
+    FS[**Mount policy**: project dir is RW;
+       everything else is RO or absent]
+    Seccomp[**seccomp** syscall whitelist
+            <code>SANDBOX_SECCOMP_ALLOW=</code>]
+    Caps[capabilities / UID mapping
+         controlled by <code><b>BWRAP_ARGS=</b></code>]
+  end
+
+  FS -->|prevents| TryFS
+  Seccomp -->|prevents| TrySys
+  Caps -->|governs| TryNet
+```
 
 
 Viable alternatives
