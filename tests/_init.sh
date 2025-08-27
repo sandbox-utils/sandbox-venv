@@ -22,5 +22,5 @@ trap "tree -a -L 4 --si --du '$tmpdir'; rm -fr '$tmpdir'; trap - INT HUP EXIT TE
 if [ ! "${CI-}" ]; then case "$tmpdir" in /tmp*|/var/*) ;; *) exit 9 ;; esac; fi
 
 cd "$tmpdir"
-/usr/bin/python3 -m venv .venv
+/usr/bin/python -m venv .venv
 . .venv/bin/activate

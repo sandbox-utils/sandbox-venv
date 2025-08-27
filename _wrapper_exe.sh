@@ -25,7 +25,9 @@ _BWRAP_DEFAULT_ARGS=
 
 # Expose these binaries
 executables="
+    /usr/bin/python
     /usr/bin/python3
+    /usr/bin/python3*
 
     /usr/bin*/git
     /usr/bin/git-receive-*
