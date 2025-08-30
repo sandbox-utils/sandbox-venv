@@ -22,7 +22,7 @@ pip_return_status=$?
 
 new_binaries="$(
     for file in "$venv/bin"/*; do
-        [ -L "$file" ] || [ ! -x "$file" ] ||
+        [ -L "$file" ] || [ -d "$file" ] || [ ! -x "$file" ] ||
             [ "${file##*/}" = 'shell' ] ||
             is_already_wrapped "$file" ||
             is_python_shebang "$file" ||
