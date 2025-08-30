@@ -49,7 +49,7 @@ for dep in readelf ldd; do command -v "$dep" >/dev/null 2>&1 || { warn "Missing 
 lib_deps () {
     readelf -l "$1" >/dev/null 2>&1 || return 0  # Not a binary file
     readelf -l "$1" | awk '/interpreter/ {print $NF}' | tr -d '[]'
-    ldd "$1" | awk '/=>/ { print $3 }' | { grep -E '^/' || true; }
+    ldd "$1" | awk '/=>/ { print $3 }' | grep -F -v "$venv" | { grep -E '^/' || true; }
 }
 collect="$executables"
 for exe in $executables; do
