@@ -164,7 +164,10 @@ mkdir -p "$venv/cache" "$pip_cache"
 set -- --bind "$venv/cache" "$home/.cache" "$@"
 
 # Pass our own redacted copy of env
-for var in $(env | grep -E '^(USER|LOGNAME|UID|PATH|TERM|LANGUAGE|LANG|LC_.*?|HOSTNAME)='); do
+for var in $(env | grep -E '^('\
+'USER|LOGNAME|UID|PATH|TERM|HOSTNAME|'\
+'LANGUAGE|LANG|LC_.*?|'\
+'CC|CFLAGS|CXXFLAGS|CPPFLAGS|LDFLAGS|LDLIBS|MAKEFLAGS)='); do
     set -- --setenv "${var%%=*}" "${var#*=}" "$@"
 done
 
