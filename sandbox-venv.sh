@@ -77,7 +77,7 @@ wrap_all () (
         [ -L "$file" ] && case "$(readlink "$file")" in /*) ;; *) continue ;; esac || true  # Skip relative symlinks
 
         unsafe_file="$bin/.unsafe_${file##*/}"
-        if ! is_already_wrapped "$file"; then
+        if ! is_already_wrapped "$file" && [ "${file##*/}" != 'shell' ]; then
             mv -v "$file" "$unsafe_file"
         fi
 
