@@ -159,6 +159,35 @@ list_bwrap  # Function call
 You can run `$venv/bin/shell` to spawn **interactive shell inside the sandbox**.
 
 
+#### Environment variables
+
+* `BWRAP_ARGS=`– Extra arguments passed to `bwrap` process; space or line-delimited (if arguments such as paths themselves contain spaces).
+* `SANDBOX_SECCOMP_ALLOW=`– Space-separated list of system calls allowed by the installed Linux seccomp filter. Requires `libseccomp2` and `python3-seccomp` / Python package `pyseccomp`
+* `SANDBOX_USE_PIP_CACHE=`– Mount current user's `$HOME/.cache/pip` inside the sandbox. Insecure, but can be used to cache large, trusted package downloads. Otherwise, pip is always invoked with a clean cache as if `pip --no-cache-dir ...` were used.
+* `VERBOSE=`– Print full `exec bwrap` command line right before execution.
+
+
+Examples
+--------
+To install a heavy package that requires a compiler, it is easiest to
+supply it with full _/usr_ and _/lib_:
+```sh
+BWRAP_ARGS='--ro-bind /usr /usr --ro-bind /lib /lib'  pip install ...
+```
+
+To pass extra environment variables, other than those filtered by default,
+use `bwrap --setenv`, e.g.:
+```sh
+BWRAP_ARGS='--setenv OPENAI_API_KEY c4f3b4b3'  my-ai-prog
+```
+
+To run GUI (X11) apps, some prior success was achieved using e.g.:
+```sh
+BWRAP_ARGS='--bind /tmp/.X11-unix/X0 /tmp/.X11-unix/X8 --setenv DISPLAY :8'
+```
+See [more examples on the ArchWiki](https://wiki.archlinux.org/title/Bubblewrap#Using_X11).
+
+
 Security Model
 --------------
 Entrypoints in `$venv/bin` are wrapped to `exec bwrap`
@@ -184,13 +213,20 @@ directory layout etc. This was done for simplicity—pull requests appreciated!
 flowchart TB
   Attacker[Malicious package /
            rogue dependency]
-  Attacker -->|filesystem access| TryFS[try to read ~/.ssh, /etc,
-                                        or other host files]
+  Attacker -->|filesystem access| TryFS
+  Attacker -->|use Linux syscalls| TrySys
+  Attacker -->|network bind| TryNet
+
+  subgraph Threats
+    TryFS[try to read ~/.ssh, /etc,
+          or other host secrets]
+    TrySys[call a forbidden /
+           privileged syscall]
+    TryNet[bind to a privileged port]
+  end
+
   TryFS -->|failure| FS
-  Attacker -->|use Linux syscalls| TrySys[call a forbidden /
-                                          privileged syscall]
   TrySys -->|blocked| Seccomp[seccomp sandbox]
-  Attacker -->|network bind| TryNet[bind to a privileged port]
   TryNet -->|optional| Caps
 
   subgraph Mitigations
@@ -201,10 +237,6 @@ flowchart TB
     Caps[capabilities / UID mapping
          controlled by <code><b>BWRAP_ARGS=</b></code>]
   end
-
-  FS -->|prevents| TryFS
-  Seccomp -->|prevents| TrySys
-  Caps -->|governs| TryNet
 ```
 
 
