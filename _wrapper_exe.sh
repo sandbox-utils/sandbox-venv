@@ -90,6 +90,8 @@ ro_bind_extra="
     /etc/os-release
     /usr/share/locale
     /usr/share/zoneinfo
+    /etc/localtime
+    /etc/timezone
 
     /usr/share/ca-certificates*
     /etc/pki*
@@ -166,7 +168,8 @@ set -- --bind "$venv/cache" "$home/.cache" "$@"
 # Pass our own redacted copy of env
 for var in $(env | grep -E '^('\
 'USER|LOGNAME|UID|PATH|TERM|HOSTNAME|'\
-'LANGUAGE|LANG|LC_.*?|'\
+'LANGUAGE|LANG|LC_.*?|TZ|'\
+'https?_proxy|HTTPS?_PROXY|'\
 'CC|CFLAGS|CXXFLAGS|CPPFLAGS|LDFLAGS|LDLIBS|MAKEFLAGS)='); do
     set -- --setenv "${var%%=*}" "${var#*=}" "$@"
 done
@@ -198,4 +201,11 @@ exec bwrap \
     --setenv USER "user" \
     --setenv VIRTUAL_ENV "$venv" \
     --setenv PYTHONPATH "$venv/sandbox:${PYTHONPATH-}" \
-    "$@"
+    --bind-data 5 /etc/passwd \
+    --bind-data 4 /etc/group \
+    "$@" \
+    5<<EOF 4<<EOF2
+$(getent passwd "$uid" 65534)
+EOF
+$(getent group "$(id -g)" 65534)
+EOF2
