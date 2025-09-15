@@ -5,6 +5,7 @@ set -eu
 case "$(set -o)" in *pipefail*) set -o pipefail ;; esac
 alias realpath='realpath --no-symlinks'
 warn () { echo "sandbox-venv/wrapper: $*" >&2; }
+command_exists () { command -v "$1" >/dev/null 2>&1; }
 
 venv="$(realpath "${0%/*}/..")"
 
@@ -90,11 +91,89 @@ set -- $(split_args_by_lf "$_BWRAP_DEFAULT_ARGS") \
        "${0%/*}/$EXECUTABLE" "$@"
 unset IFS
 
+# Make private temp dir for use as TMPDIR
+uid="$(id -u)"
+tmpdir="$(mktemp -d -t ".sandbox-venv.$uid.$$.XXXXXX")"
+cleanup_temp () { [ -z "$(find "$tmpdir" -type f -print -quit)" ] && rm -r "$tmpdir"; }
+trap cleanup_temp EXIT
+
+# Support for Open URLs / XDG Desktop Portal in wrapped applications
+if command_exists xdg-dbus-proxy; then
+    dbus_proxy_path="$tmpdir/dbus-proxy"
+    fifo_path="${dbus_proxy_path}.sync"
+    mkfifo "$fifo_path"
+
+    xdg-dbus-proxy --fd=8 8>"$fifo_path" \
+        "${DBUS_SESSION_BUS_ADDRESS:-unix:path=${XDG_RUNTIME_DIR:-/run/user/$uid}/bus}" \
+        "$dbus_proxy_path" --filter --talk=org.freedesktop.portal.* \
+        &
+
+    # Unblock FIFO and wait for xdg-dbus-proxy to touch $dbus_proxy_path
+    exec 7<"$fifo_path" && rm "$fifo_path" && sleep .1 && test -e "$dbus_proxy_path"
+
+    add_dbus_send () {
+        for exe in dbus-send gdbus busctl; do
+            if command_exists "$exe"; then
+                executables="$executables
+$(command -v "$exe")"
+                return 0
+            fi
+        done
+        return 1
+    }
+    add_dbus_send || warn 'Need one of dbus-send (from package dbus-bin) / gdbus (libglib*-bin) / busctl (systemd) to use XDG Desktop Portal'
+
+    exec 9<<EOF
+#!/bin/sh
+set -eu
+address="unix:path=$dbus_proxy_path"
+pth='/org/freedesktop/portal/desktop'
+service='org.freedesktop.portal.Desktop'
+interface='org.freedesktop.portal.OpenURI'
+method='OpenURI'
+dbus-send --bus="\$address" --type method_call --dest=\$service \$pth \$interface.\$method \
+    string: string:"\$1" dict:string:variant: \
+||
+gdbus call --address "\$address" --dest \$service --object-path \$pth --method \$interface.\$method \
+    '' "\$1" '{}' >/dev/null \
+||
+busctl --verbose --address "\$address" call \$service \$pth \$interface \$method \
+    'ssa{sv}' '' "\$1" 0
+EOF
+    exec 6<<EOF
+[Instance]
+flatpak-version=9000
+EOF
+    xdg_open='/usr/bin/xdg-open'
+    # Extra bwrap args
+    # FIXME: Implementation is BUGGY. Even as appropriate mounts are bound,
+    #   a full working XDG Portal (e.g. a working file chooser FUSE mount)
+    #   was so far in testing of some PyQt5 app not achieved.
+    #   D-Bus communication does happen, as observed with:
+    #
+    #       busctl --user monitor org.freedesktop.portal.Documents org.freedesktop.portal.Desktop org.freedesktop.impl.portal.desktop.gtk
+    #
+    #   A LLM suggests it may have something to do with the process PID being
+    #   that of the xdg-dbus-proxy, run by this user outside the sandbox. :shrug:
+    set -- --block-fd 7 --sync-fd 7 \
+        --setenv DBUS_SESSION_BUS_ADDRESS "unix:path=$dbus_proxy_path" \
+        --perms 0555 --ro-bind-data 9 "$xdg_open" \
+        --symlink "$xdg_open" "/usr/bin/chromium" \
+        --symlink "$xdg_open" "/usr/bin/x-www-browser" \
+        --ro-bind-data 6 "/.flatpak-info" \
+        --bind "${XDG_RUNTIME_DIR:-/run/user/$uid}/doc" "${XDG_RUNTIME_DIR:-/run/user/$uid}/doc" \
+        --setenv container 'sandbox-venv' \
+        "$@"
+else
+    warn "Can't mock xdg-open or use XDG Desktop Portal: xdg-dbus-proxy not available."
+    set -- --dir "/run/user/$uid" "$@"
+fi
+
 # Quiet very verbose, iterative args-constructing parts that follow
 case $- in *x*) xtrace=-x ;; *) xtrace=+x ;; esac; set +x
 
 # Collect binaries' lib dependencies
-for exe in readelf ldd; do command -v "$exe" >/dev/null 2>&1 || { warn "Missing executable: $exe"; exit 1; }; done
+for exe in readelf ldd; do command_exists "$exe" || { warn "Missing executable: $exe"; exit 1; }; done
 lib_deps () {
     readelf -l "$1" >/dev/null 2>&1 || return 0  # Not a binary file
     readelf -l "$1" | awk '/interpreter/ {print $NF}' | tr -d '[]'
@@ -181,18 +260,17 @@ done
 
 set $xtrace
 
-warn "exec bwrap [...] $formatted_cmdline"
-
-uid="$(id -u)"
 cwd="$(pwd)"
+
+warn "exec bwrap [...] $formatted_cmdline"
 
 [ ! "${VERBOSE:-${verbose:-}}" ] || set -x
 
 # shellcheck disable=SC2086
-exec bwrap \
+bwrap \
     --dir /tmp \
-    --dir "/run/user/$uid" \
     --dir "$cwd" \
+    --bind "$tmpdir" "$tmpdir" \
     --chdir "$cwd" \
     --proc /proc \
     --dev /dev \
@@ -206,6 +284,7 @@ exec bwrap \
     --setenv USER "user" \
     --setenv VIRTUAL_ENV "$venv" \
     --setenv PYTHONPATH "$venv/sandbox:${PYTHONPATH-}" \
+    --setenv TMPDIR "$tmpdir" \
     --bind-data 5 /etc/passwd \
     --bind-data 4 /etc/group \
     "$@" \
@@ -214,3 +293,5 @@ $(getent passwd "$uid" 65534)
 EOF
 $(getent group "$(id -g)" 65534)
 EOF2
+
+exec 7<&- && wait ${!-}  # Close FD 7, permitting xdg-dbus-proxy to exit

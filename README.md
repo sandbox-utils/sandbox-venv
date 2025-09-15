@@ -65,7 +65,9 @@ including GNU/Linux and even
 ```shell
 # Install the few, unlikely to be missing dependencies, e.g.
 sudo apt install coreutils binutils bubblewrap libseccomp2 python3
- 
+# A working XDG Desktop Portal is recommended to xdg-open hyperlinks
+sudo apt install xdg-dbus-proxy xdg-desktop-portal*  # Note: only need one
+
 # Download the script and put it somewhere on PATH
 curl -vL 'https://bit.ly/sandbox-venv' | sudo tee /usr/local/bin/sandbox-venv
 sudo chmod +x /usr/local/bin/sandbox-venv  # Mark executable
