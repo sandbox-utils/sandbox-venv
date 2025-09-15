@@ -28,6 +28,7 @@ jobs:
       - run: time bash tests/smoke-test.sh
       - run: time bash tests/test-bwrap-opts.sh
       - run: time bash tests/test-seccomp.sh
+      - run: time bash tests/test-env-vars.sh
 
   workflow-keepalive:
     if: github.event_name == 'schedule'
