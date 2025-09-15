@@ -8,7 +8,7 @@ warn () { echo "sandbox-venv/wrapper: $*" >&2; }
 
 venv="$(realpath "${0%/*}/..")"
 
-# Quote args with spaces
+# Quote args with spaces. Do this here before overriding "$@"
 format_args () {
     for arg in "$@"; do case "$arg" in
         $venv/*) printf "%s " "${venv##*/}/${arg#"$venv/"}" ;;
@@ -41,32 +41,6 @@ executables="
     /bin/uname
     /sbin/ldconfig*
 "
-
-case $- in *x*) xtrace=-x ;; *) xtrace=+x ;; esac; set +x
-
-# Collect binaries' lib dependencies
-for dep in readelf ldd; do command -v "$dep" >/dev/null 2>&1 || { warn "Missing executable: $dep"; exit 1; }; done
-lib_deps () {
-    readelf -l "$1" >/dev/null 2>&1 || return 0  # Not a binary file
-    readelf -l "$1" | awk '/interpreter/ {print $NF}' | tr -d '[]'
-    ldd "$1" | awk '/=>/ { print $3 }' | grep -F -v "$venv" | { grep -E '^/' || true; }
-}
-collect="$executables"
-for exe in $executables; do
-    collect="$collect
-        $(lib_deps "$exe")"
-done
-
-# Collect lib deps from venv/lib/*.so
-root_so_lib_dirs="
-    /usr/lib/python3*/lib-dynload
-    /usr/lib64/python3*/lib-dynload"
-# XXX: If some `git` tools are failing, add $(find /usr/lib/git-core -type f)
-for exe in $(find "$venv/lib" $root_so_lib_dirs -name '*.so' 2>/dev/null || true); do
-    collect="$collect
-        $(lib_deps "$exe")"
-done
-
 # Explicit Python deps we know of
 py_libs="
     /usr/include/python3*
@@ -99,20 +73,58 @@ ro_bind_extra="
     /usr/share/pki*
 "
 
+# Begin constructing args for bwrap, in reverse
+# (later args in command line override prior ones)
+
+split_args_by_lf () {
+    lf='
+'
+    printf '%s' "$1" | case "$1" in *$lf*) cat ;; *) tr ' ' '\n' ;; esac
+}
+
+IFS='
+'  # Split args only on newline
+# shellcheck disable=SC2046
+set -- $(split_args_by_lf "$_BWRAP_DEFAULT_ARGS") \
+       $(split_args_by_lf "${BWRAP_ARGS:-}") \
+       "${0%/*}/$EXECUTABLE" "$@"
+unset IFS
+
+# Quiet very verbose, iterative args-constructing parts that follow
+case $- in *x*) xtrace=-x ;; *) xtrace=+x ;; esac; set +x
+
+# Collect binaries' lib dependencies
+for exe in readelf ldd; do command -v "$exe" >/dev/null 2>&1 || { warn "Missing executable: $exe"; exit 1; }; done
+lib_deps () {
+    readelf -l "$1" >/dev/null 2>&1 || return 0  # Not a binary file
+    readelf -l "$1" | awk '/interpreter/ {print $NF}' | tr -d '[]'
+    ldd "$1" | awk '/=>/ { print $3 }' | grep -F -v "$venv" | { grep -E '^/' || true; }
+}
+collect="$executables"
+for exe in $executables; do
+    collect="$collect
+        $(lib_deps "$exe")"
+done
+root_so_lib_dirs="
+    /usr/lib/python3*/lib-dynload
+    /usr/lib64/python3*/lib-dynload"
+# XXX: If some `git` tools are failing, add $(find /usr/lib/git-core -type f)
+for exe in $(find "$venv/lib" $root_so_lib_dirs -name '*.so' 2>/dev/null || true); do
+    collect="$collect
+        $(lib_deps "$exe")"
+done
+
+# Filter collect, warn on non-existant paths, unique sort, cull.
+# Use separate for-loop to expand globstar.
+prev="sandbox@"
 collect="
     $collect
     $ro_bind_extra
     $seccomp_libs
     $git_libs
     $py_libs"
-
-# Filter collect, warn on non-existant paths, unique sort, cull.
-# Use separate for-loop to expand globstar.
-prev="sandbox@"
 collect="$(
-    # Split only on newline
     for path in $collect; do
-        path="$(printf '%s' "$path" | sed -r 's/^ +//;s/ +$//')"
         [ -e "$path" ] ||
             # Don't warn for globstar paths as they are allowed to not match
             case "$path" in *\**) continue ;; *) warn "Warning: missing $path"; continue ;; esac
@@ -125,33 +137,7 @@ collect="$(
         case $path in "$prev"/*) continue;; esac
         echo "$path"; prev="$path"
     done)"
-
-split_args_by_lf () {
-    lf='
-'
-    printf '%s' "$1" | case "$1" in *$lf*) cat ;; *) tr ' ' '\n' ;; esac; }
-
-# Begins constructing args for bwrap, in reverse
-# (later args in command line override prior ones)
-IFS='
-'  # Split args only on newline
-# shellcheck disable=SC2046
-set -- $(split_args_by_lf "$_BWRAP_DEFAULT_ARGS") \
-       $(split_args_by_lf "${BWRAP_ARGS:-}") \
-       "${0%/*}/$EXECUTABLE" "$@"
-
 for path in $collect; do set -- --ro-bind "$path" "$path" "$@"; done
-
-# RW-bind project dir (dir that contains .venv)
-# but RO-bind some dirs like .venv and git
-proj_dir="$(realpath "$venv/..")"
-ro_bind_pwd_extra="
-    ${venv##*/}
-    .git"
-for path in $ro_bind_pwd_extra; do
-    [ ! -e "$proj_dir/$path" ] || set -- --ro-bind "$proj_dir/$path" "$proj_dir/$path" "$@"
-done
-set -- --bind "$proj_dir" "$proj_dir" "$@"
 
 # RW bind cache dirs for downloads etc.
 home="${HOME:-"/home/$USER"}"
@@ -164,6 +150,17 @@ mkdir -p "$venv/cache" "$pip_cache"
     set -- --bind "$pip_cache" "$home/.cache/pip" "$@"
 }
 set -- --bind "$venv/cache" "$home/.cache" "$@"
+# RW-bind project dir (dir that contains .venv)
+# but RO-bind some dirs like .venv and git
+proj_dir="$(realpath "$venv/..")"
+ro_bind_pwd_extra="
+    ${venv##*/}
+    .git"
+for path in $ro_bind_pwd_extra; do
+    [ ! -e "$proj_dir/$path" ] || set -- --ro-bind "$proj_dir/$path" "$proj_dir/$path" "$@"
+done
+# Lastly ... (this arg will appear first)
+set -- --bind "$proj_dir" "$proj_dir" "$@"
 
 # Pass our own redacted copy of env
 for var in $(env | grep -E '^('\
