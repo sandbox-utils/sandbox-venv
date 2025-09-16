@@ -139,10 +139,10 @@ collect="$(
     done)"
 for path in $collect; do set -- --ro-bind "$path" "$path" "$@"; done
 
-# RW bind cache dirs for downloads etc.
+# RW bind $HOME and cache dirs for downloads etc.
 home="${HOME:-"/home/$USER"}"
 pip_cache="$home/${XDG_CACHE_HOME:-.cache}/pip"
-mkdir -p "$venv/cache" "$pip_cache"
+mkdir -p "$venv/home" "$venv/cache" "$pip_cache"
 [ ! "${SANDBOX_USE_PIP_CACHE-}" ] || {
     mkdir -p "$venv/cache/pip" &&
         echo "This dir is an artefact of Bubblewrap bind mounting. Real pip cache is in \$HOME/.cache/pip" \
@@ -160,7 +160,7 @@ for path in $ro_bind_pwd_extra; do
     [ ! -e "$proj_dir/$path" ] || set -- --ro-bind "$proj_dir/$path" "$proj_dir/$path" "$@"
 done
 # Lastly ... (this arg will appear first)
-set -- --bind "$proj_dir" "$proj_dir" "$@"
+set -- --bind "$venv/home" "$home" --bind "$proj_dir" "$proj_dir" "$@"
 
 # Pass our own redacted copy of env
 # Expose all vars passed exclusively to this process (i.e. not its parent)
