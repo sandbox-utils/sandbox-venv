@@ -77,7 +77,7 @@ wrap_all () (
         [ -L "$file" ] && case "$(readlink "$file")" in /*) ;; *) continue ;; esac || true  # Skip relative symlinks
 
         unsafe_file="$bin/.unsafe_${file##*/}"
-        if ! is_already_wrapped "$file"; then
+        if ! is_already_wrapped "$file" && [ "${file##*/}" != 'shell' ]; then
             mv -v "$file" "$unsafe_file"
         fi
 
@@ -129,7 +129,7 @@ pip_return_status=$?
 
 new_binaries="$(
     for file in "$venv/bin"/*; do
-        [ -L "$file" ] || [ ! -x "$file" ] ||
+        [ -L "$file" ] || [ -d "$file" ] || [ ! -x "$file" ] ||
             [ "${file##*/}" = 'shell' ] ||
             is_already_wrapped "$file" ||
             is_python_shebang "$file" ||
@@ -158,10 +158,11 @@ set -eu
 case "$(set -o)" in *pipefail*) set -o pipefail ;; esac
 alias realpath='realpath --no-symlinks'
 warn () { echo "sandbox-venv/wrapper: $*" >&2; }
+command_exists () { command -v "$1" >/dev/null 2>&1; }
 
 venv="$(realpath "${0%/*}/..")"
 
-# Quote args with spaces
+# Quote args with spaces. Do this here before overriding "$@"
 format_args () {
     for arg in "$@"; do case "$arg" in
         $venv/*) printf "%s " "${venv##*/}/${arg#"$venv/"}" ;;
@@ -194,32 +195,6 @@ executables="
     /bin/uname
     /sbin/ldconfig*
 "
-
-case $- in *x*) xtrace=-x ;; *) xtrace=+x ;; esac; set +x
-
-# Collect binaries' lib dependencies
-for dep in readelf ldd; do command -v "$dep" >/dev/null 2>&1 || { warn "Missing executable: $dep"; exit 1; }; done
-lib_deps () {
-    readelf -l "$1" >/dev/null 2>&1 || return 0  # Not a binary file
-    readelf -l "$1" | awk '/interpreter/ {print $NF}' | tr -d '[]'
-    ldd "$1" | awk '/=>/ { print $3 }' | { grep -E '^/' || true; }
-}
-collect="$executables"
-for exe in $executables; do
-    collect="$collect
-        $(lib_deps "$exe")"
-done
-
-# Collect lib deps from venv/lib/*.so
-root_so_lib_dirs="
-    /usr/lib/python3*/lib-dynload
-    /usr/lib64/python3*/lib-dynload"
-# XXX: If some `git` tools are failing, add $(find /usr/lib/git-core -type f)
-for exe in $(find "$venv/lib" $root_so_lib_dirs -name '*.so' 2>/dev/null || true); do
-    collect="$collect
-        $(lib_deps "$exe")"
-done
-
 # Explicit Python deps we know of
 py_libs="
     /usr/include/python3*
@@ -243,6 +218,8 @@ ro_bind_extra="
     /etc/os-release
     /usr/share/locale
     /usr/share/zoneinfo
+    /etc/localtime
+    /etc/timezone
 
     /usr/share/ca-certificates*
     /etc/pki*
@@ -250,20 +227,136 @@ ro_bind_extra="
     /usr/share/pki*
 "
 
+# Begin constructing args for bwrap, in reverse
+# (later args in command line override prior ones)
+
+split_args_by_lf () {
+    lf='
+'
+    printf '%s' "$1" | case "$1" in *$lf*) cat ;; *) tr ' ' '\n' ;; esac
+}
+
+IFS='
+'  # Split args only on newline
+# shellcheck disable=SC2046
+set -- $(split_args_by_lf "$_BWRAP_DEFAULT_ARGS") \
+       $(split_args_by_lf "${BWRAP_ARGS:-}") \
+       "${0%/*}/$EXECUTABLE" "$@"
+unset IFS
+
+# Make private temp dir for use as TMPDIR
+uid="$(id -u)"
+tmpdir="$(mktemp -d -t ".sandbox-venv.$uid.$$.XXXXXX")"
+cleanup_temp () { [ -z "$(find "$tmpdir" -type f -print -quit)" ] && rm -r "$tmpdir"; }
+trap cleanup_temp EXIT
+
+# Support for Open URLs / XDG Desktop Portal in wrapped applications
+if command_exists xdg-dbus-proxy; then
+    dbus_proxy_path="$tmpdir/dbus-proxy"
+    fifo_path="${dbus_proxy_path}.sync"
+    mkfifo "$fifo_path"
+
+    xdg-dbus-proxy --fd=8 8>"$fifo_path" \
+        "${DBUS_SESSION_BUS_ADDRESS:-unix:path=${XDG_RUNTIME_DIR:-/run/user/$uid}/bus}" \
+        "$dbus_proxy_path" --filter --talk=org.freedesktop.portal.* \
+        &
+
+    # Unblock FIFO and wait for xdg-dbus-proxy to touch $dbus_proxy_path
+    exec 7<"$fifo_path" && rm "$fifo_path" && sleep .1 && test -e "$dbus_proxy_path"
+
+    add_dbus_send () {
+        for exe in dbus-send gdbus busctl; do
+            if command_exists "$exe"; then
+                executables="$executables
+$(command -v "$exe")"
+                return 0
+            fi
+        done
+        return 1
+    }
+    add_dbus_send || warn 'Need one of dbus-send (from package dbus-bin) / gdbus (libglib*-bin) / busctl (systemd) to use XDG Desktop Portal'
+
+    exec 9<<EOF
+#!/bin/sh
+set -eu
+address="unix:path=$dbus_proxy_path"
+pth='/org/freedesktop/portal/desktop'
+service='org.freedesktop.portal.Desktop'
+interface='org.freedesktop.portal.OpenURI'
+method='OpenURI'
+dbus-send --bus="\$address" --type method_call --dest=\$service \$pth \$interface.\$method \
+    string: string:"\$1" dict:string:variant: \
+||
+gdbus call --address "\$address" --dest \$service --object-path \$pth --method \$interface.\$method \
+    '' "\$1" '{}' >/dev/null \
+||
+busctl --verbose --address "\$address" call \$service \$pth \$interface \$method \
+    'ssa{sv}' '' "\$1" 0
+EOF
+    exec 6<<EOF
+[Instance]
+flatpak-version=9000
+EOF
+    xdg_open='/usr/bin/xdg-open'
+    # Extra bwrap args
+    # FIXME: Implementation is BUGGY. Even as appropriate mounts are bound,
+    #   a full working XDG Portal (e.g. a working file chooser FUSE mount)
+    #   was so far in testing of some PyQt5 app not achieved.
+    #   D-Bus communication does happen, as observed with:
+    #
+    #       busctl --user monitor org.freedesktop.portal.Documents org.freedesktop.portal.Desktop org.freedesktop.impl.portal.desktop.gtk
+    #
+    #   A LLM suggests it may have something to do with the process PID being
+    #   that of the xdg-dbus-proxy, run by this user outside the sandbox. :shrug:
+    set -- --block-fd 7 --sync-fd 7 \
+        --setenv DBUS_SESSION_BUS_ADDRESS "unix:path=$dbus_proxy_path" \
+        --perms 0555 --ro-bind-data 9 "$xdg_open" \
+        --symlink "$xdg_open" "/usr/bin/chromium" \
+        --symlink "$xdg_open" "/usr/bin/x-www-browser" \
+        --ro-bind-data 6 "/.flatpak-info" \
+        --bind "${XDG_RUNTIME_DIR:-/run/user/$uid}/doc" "${XDG_RUNTIME_DIR:-/run/user/$uid}/doc" \
+        --setenv container 'sandbox-venv' \
+        "$@"
+else
+    warn "Can't mock xdg-open or use XDG Desktop Portal: xdg-dbus-proxy not available."
+    set -- --dir "/run/user/$uid" "$@"
+fi
+
+# Quiet very verbose, iterative args-constructing parts that follow
+case $- in *x*) xtrace=-x ;; *) xtrace=+x ;; esac; set +x
+
+# Collect binaries' lib dependencies
+for exe in readelf ldd; do command_exists "$exe" || { warn "Missing executable: $exe"; exit 1; }; done
+lib_deps () {
+    readelf -l "$1" >/dev/null 2>&1 || return 0  # Not a binary file
+    readelf -l "$1" | awk '/interpreter/ {print $NF}' | tr -d '[]'
+    ldd "$1" | awk '/=>/ { print $3 }' | grep -F -v "$venv" | grep -E '^/' || true
+}
+collect="$executables"
+for exe in $executables; do
+    collect="$collect
+        $(lib_deps "$exe")"
+done
+root_so_lib_dirs="
+    /usr/lib/python3*/lib-dynload
+    /usr/lib64/python3*/lib-dynload"
+# XXX: If some `git` tools are failing, add $(find /usr/lib/git-core -type f)
+for exe in $(find "$venv/lib" $root_so_lib_dirs -name '*.so' 2>/dev/null || true); do
+    collect="$collect
+        $(lib_deps "$exe")"
+done
+
+# Filter collect, warn on non-existant paths, unique sort, cull.
+# Use separate for-loop to expand globstar.
+prev="sandbox@"
 collect="
     $collect
     $ro_bind_extra
     $seccomp_libs
     $git_libs
     $py_libs"
-
-# Filter collect, warn on non-existant paths, unique sort, cull.
-# Use separate for-loop to expand globstar.
-prev="sandbox@"
 collect="$(
-    # Split only on newline
     for path in $collect; do
-        path="$(printf '%s' "$path" | sed -r 's/^ +//;s/ +$//')"
         [ -e "$path" ] ||
             # Don't warn for globstar paths as they are allowed to not match
             case "$path" in *\**) continue ;; *) warn "Warning: missing $path"; continue ;; esac
@@ -276,23 +369,19 @@ collect="$(
         case $path in "$prev"/*) continue;; esac
         echo "$path"; prev="$path"
     done)"
-
-split_args_by_lf () {
-    lf='
-'
-    printf '%s' "$1" | case "$1" in *$lf*) cat ;; *) tr ' ' '\n' ;; esac; }
-
-# Begins constructing args for bwrap, in reverse
-# (later args in command line override prior ones)
-IFS='
-'  # Split args only on newline
-# shellcheck disable=SC2046
-set -- $(split_args_by_lf "$_BWRAP_DEFAULT_ARGS") \
-       $(split_args_by_lf "${BWRAP_ARGS:-}") \
-       "${0%/*}/$EXECUTABLE" "$@"
-
 for path in $collect; do set -- --ro-bind "$path" "$path" "$@"; done
 
+# RW bind $HOME and cache dirs for downloads etc.
+home="${HOME:-"/home/$USER"}"
+pip_cache="$home/${XDG_CACHE_HOME:-.cache}/pip"
+mkdir -p "$venv/home" "$venv/cache" "$pip_cache"
+[ ! "${SANDBOX_USE_PIP_CACHE-}" ] || {
+    mkdir -p "$venv/cache/pip" &&
+        echo "This dir is an artefact of Bubblewrap bind mounting. Real pip cache is in \$HOME/.cache/pip" \
+        > "$venv/cache/pip/note.txt"
+    set -- --bind "$pip_cache" "$home/.cache/pip" "$@"
+}
+set -- --bind "$venv/cache" "$home/.cache" "$@"
 # RW-bind project dir (dir that contains .venv)
 # but RO-bind some dirs like .venv and git
 proj_dir="$(realpath "$venv/..")"
@@ -302,39 +391,42 @@ ro_bind_pwd_extra="
 for path in $ro_bind_pwd_extra; do
     [ ! -e "$proj_dir/$path" ] || set -- --ro-bind "$proj_dir/$path" "$proj_dir/$path" "$@"
 done
-set -- --bind "$proj_dir" "$proj_dir" "$@"
-
-# RW bind cache dirs for downloads etc.
-home="${HOME:-"/home/$USER"}"
-pip_cache="$home/${XDG_CACHE_HOME:-.cache}/pip"
-mkdir -p "$venv/cache" "$pip_cache"
-[ ! "${SANDBOX_USE_PIP_CACHE-}" ] || {
-    mkdir -p "$venv/cache/pip" &&
-        echo "This dir is an artefact of Bubblewrap bind mounting. Real pip cache is in \$HOME/.cache/pip" \
-        > "$venv/cache/pip/note.txt"
-    set -- --bind "$pip_cache" "$home/.cache/pip" "$@"
-}
-set -- --bind "$venv/cache" "$home/.cache" "$@"
+# Lastly ... (this arg will appear first)
+set -- --bind "$venv/home" "$home" --bind "$proj_dir" "$proj_dir" "$@"
 
 # Pass our own redacted copy of env
-for var in $(env | grep -E '^(USER|LOGNAME|UID|PATH|TERM|LANGUAGE|LANG|LC_.*?|HOSTNAME)='); do
+# Expose all vars passed exclusively to this process (i.e. not its parent)
+IFS=$(printf '\037')
+for var in $(env -0 |
+        grep -Ez -e '^('\
+'USER|LOGNAME|UID|PATH|TERM|HOSTNAME|'\
+'LANGUAGE|LANG|LC_.*?|TZ|'\
+'https?_proxy|HTTPS?_PROXY|'\
+'CC|CFLAGS|CXXFLAGS|CPPFLAGS|LDFLAGS|LDLIBS|MAKEFLAGS)=' \
+                 -e "^($(env -0 |
+                         cut -z -d= -f1 |
+                         grep -Ezv "^($(cut -z -d= -f1 </proc/$PPID/environ |
+                                        paste -z -s -d '|'))$" |
+                         paste -z -s -d '|'))=" |
+        grep -Ezv -e '^(_|LS_COLORS|PS1)=' |
+        tr '\0' '\037'); do
     set -- --setenv "${var%%=*}" "${var#*=}" "$@"
 done
+unset IFS
 
 set $xtrace
 
-warn "exec bwrap [...] $formatted_cmdline"
-
-uid="$(id -u)"
 cwd="$(pwd)"
+
+warn "exec bwrap [...] $formatted_cmdline"
 
 [ ! "${VERBOSE:-${verbose:-}}" ] || set -x
 
 # shellcheck disable=SC2086
-exec bwrap \
+bwrap \
     --dir /tmp \
-    --dir "/run/user/$uid" \
     --dir "$cwd" \
+    --bind "$tmpdir" "$tmpdir" \
     --chdir "$cwd" \
     --proc /proc \
     --dev /dev \
@@ -348,7 +440,17 @@ exec bwrap \
     --setenv USER "user" \
     --setenv VIRTUAL_ENV "$venv" \
     --setenv PYTHONPATH "$venv/sandbox:${PYTHONPATH-}" \
-    "$@"
+    --setenv TMPDIR "$tmpdir" \
+    --bind-data 5 /etc/passwd \
+    --bind-data 4 /etc/group \
+    "$@" \
+    5<<EOF 4<<EOF2
+$(getent passwd "$uid" 65534)
+EOF
+$(getent group "$(id -g)" 65534)
+EOF2
+
+exec 7<&- && wait ${!-}  # Close FD 7, permitting xdg-dbus-proxy to exit
 
 
 # CUT HERE ------------------- Appendix 3: sandbox-venv sitecustomize.py script
