@@ -243,6 +243,7 @@ set -- --bind "$venv/home" "$home" --bind "$proj_dir" "$proj_dir" "$@"
 
 # Pass our own redacted copy of env
 # Expose all vars passed exclusively to this process (i.e. not its parent)
+IFS=$(printf '\037')
 for var in $(env -0 |
         grep -Ez -e '^('\
 'USER|LOGNAME|UID|PATH|TERM|HOSTNAME|'\
@@ -254,9 +255,11 @@ for var in $(env -0 |
                          grep -Ezv "^($(cut -z -d= -f1 </proc/$PPID/environ |
                                         paste -z -s -d '|'))$" |
                          paste -z -s -d '|'))=" |
-        tr '\0' '\n'); do
+        grep -Ezv -e '^(_|LS_COLORS|PS1)=' |
+        tr '\0' '\037'); do
     set -- --setenv "${var%%=*}" "${var#*=}" "$@"
 done
+unset IFS
 
 set $xtrace
 
