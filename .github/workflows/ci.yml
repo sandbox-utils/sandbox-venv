@@ -30,6 +30,7 @@ jobs:
       - run: time bash tests/test-seccomp.sh
       - run: time bash tests/test-env-vars.sh
       - run: time bash tests/test-expose-home.sh
+      - run: time bash tests/test-idempotent.sh
 
   workflow-keepalive:
     if: github.event_name == 'schedule'

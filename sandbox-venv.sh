@@ -71,15 +71,13 @@ wrap_all () (
     for file in "$bin"/*; do
         # shellcheck disable=SC2015
         [ -f "$file" ] && [ -x "$file" ] || continue
-        ! is_already_wrapped "$file" || continue
+        [ "${file##*/}" != 'shell' ] || continue  # Skip our bin/shell
         case "${file##*/}" in pip*) ;; *) ! is_python_shebang "$file" || continue ;; esac  # Skip if wrapped transitively, except pip
         # shellcheck disable=SC2015
         [ -L "$file" ] && case "$(readlink "$file")" in /*) ;; *) continue ;; esac || true  # Skip relative symlinks
 
         unsafe_file="$bin/.unsafe_${file##*/}"
-        if ! is_already_wrapped "$file" && [ "${file##*/}" != 'shell' ]; then
-            mv -v "$file" "$unsafe_file"
-        fi
+        if [ ! -e "$unsafe_file" ]; then mv -v "$file" "$unsafe_file"; fi
 
         case "${file##*/}" in
             pip|pip3*) wrap_pip "$file" "$@" ;;
@@ -90,7 +88,7 @@ wrap_all () (
     done
 
     # Install $venv/bin/shell
-    file="$(realpath "$bin/shell")"
+    file="$bin/shell"
     add_bin_shell "$file"
     chmod +x "$file"
     echo "$file"
