@@ -109,11 +109,7 @@ BWRAP_ARGS='--bind /lib /lib' \
 Note, a **[`.env` file](https://stackoverflow.com/questions/68267862/what-is-an-env-or-dotenv-file-exactly)
 at project root** is sourced for the initial environment.
 
-To run the sandboxed process as **superuser**
-(while still retaining all the security functionality of the container sandbox),
-e.g. to open privileged ports, use args:
-
-    --uid 0 --cap-add cap_net_bind_service
+See more specific examples below.
 
 
 #### Filesystem mounts
@@ -174,9 +170,14 @@ You can run `$venv/bin/shell` to spawn **interactive shell inside the sandbox**.
 * `VERBOSE=`– Print full `exec bwrap` command line right before execution.
 
 
+#### Debugging
+
+To see what's failing, run the sandbox with something like `strace -f -e '%file,%process' ...`.
+
+
 Examples
 --------
-To install a heavy package that requires a compiler, it is easiest to
+To install a heavy package that requires a compiler, it is often easiest to
 supply it with full _/usr_ and _/lib_:
 ```sh
 BWRAP_ARGS='--ro-bind /usr /usr --ro-bind /lib /lib'  pip install ...
@@ -189,33 +190,41 @@ BWRAP_ARGS='--setenv OPENAI_API_KEY c4f3b4b3'  my-ai-prog
 # or a .env (dotenv) file
 ```
 
+To run the sandboxed process as **superuser**
+(while still retaining all the security functionality of the container sandbox),
+e.g. to open privileged ports, use args:
+```sh
+BWRAP_ARGS='--uid 0 --cap-add cap_net_bind_service'  python -m http.server 80
+```
+
 To run GUI (X11) apps, some prior success was achieved using e.g.:
 ```sh
-BWRAP_ARGS='--bind /tmp/.X11-unix/X0 /tmp/.X11-unix/X8 --setenv DISPLAY :8'
+BWRAP_ARGS='--bind /tmp/.X11-unix/X0 /tmp/.X11-unix/X8 --setenv DISPLAY :8' \
+    python -m tkinter
 ```
 See [more examples on the ArchWiki](https://wiki.archlinux.org/title/Bubblewrap#Using_X11).
 
 
 Security Model
 --------------
-Entrypoints in `$venv/bin` are wrapped to `exec bwrap`
-so that every invocation runs inside a fresh Bubblewrap container.
+Entrypoints in `$venv/bin` are wrapped with `exec bwrap`
+so that every invocation runs inside a **fresh** Bubblewrap container.
 
-`$venv/bin/pip` wrapper re-wraps any newly created executables in `$venv/bin`,
+In addition, `$venv/bin/pip` wrapper re-wraps any newly created **executables** in `$venv/bin`,
 ensuring they always use the wrapped `$venv/bin/python`.
 
 Rather than giving the sandbox full filesystem access,
 minimal shared library (`*.so`) dependencies are collected and made available inside the container,
-as well as specific host binaries (e.g. `/usr/bin/python3`, `/usr/bin/git`, `/bin/sh` etc.)—actual
-runtime behavior depends on this list and which paths exist on the host.
-Most paths are mounted read-only, while the project directory
-(sans its `.venv`, `.git`) is mounted read-write.
+as well as specific host binaries (e.g. `/usr/bin/python3`, `/usr/bin/git`, `/bin/sh` etc.).
+Most paths are bind-mounted RO, while the project directory
+(sans its `.venv`, `.git`) is mounted with RW permissions.
 
 Optionally, a seccomp filter is installed at Python startup using the `sitecustomize` mechanism.
-The `BWRAP_ARGS=` environment variable lets you extend or relax the sandbox at runtime.
 
-Paths inside the sandbox mirror the host paths, potentially exposing your username,
-directory layout etc. This was done for simplicity—pull requests appreciated!
+`BWRAP_ARGS=` environment variable lets you extend or relax the sandbox at runtime.
+
+**Paths inside the sandbox mirror the host paths**, potentially exposing your username,
+directory layout etc. This was done for simplicity—pull requests greatly appreciated!
 
 ```mermaid
 flowchart TB
@@ -248,6 +257,11 @@ flowchart TB
 ```
 
 
+Contributing
+------------
+You see a mistake—you fix it. Thanks!
+
+
 Viable alternatives
 -------------------
 1. A popular alternative are the aforementioned Docker/OCI containers
@@ -257,11 +271,11 @@ Viable alternatives
 2. On Linux, [AppArmor](https://apparmor.net), even with
    [apparmor.d](https://github.com/roddhjav/apparmor.d)
    applied, doesn't ship a generic `python` profile, so one would go
-   through direct `aa-exec --profile my-custom-env`, but writing
+   through explicit `aa-exec --profile my-custom-env`, but writing
    custom AppArmor profiles is less common than simply using containers.
 3. [Firejail](https://github.com/netblue30/firejail/).
    An indie C project with virtually no dependencies (which
-   [<del>Red Hat</del><ins>IBM</ins> has a reasonable position on](https://github.com/containers/bubblewrap?tab=readme-ov-file#related-project-comparison-firejail))
+   [<del>Red Hat</del><ins>IBM</ins> has a perfectly ]reasonable position on](https://github.com/containers/bubblewrap?tab=readme-ov-file#related-project-comparison-firejail))
    that sets up its own sandbox. I guess it's a matter of trust.
    Similarly to AppArmor, requires writing a custom profile.
 4. A custom
@@ -276,4 +290,4 @@ Viable alternatives
 In comparison to the above, `sandbox-venv` is like `chroot` on steroids.
 It uses the same isolation primitives that containers use
 (process sandbox via Linux namespaces, isolated filesystem view),
-but without all of the container runtime baggage—YMMV.
+but without all of the container runtime baggage ... YMMV.
