@@ -8,6 +8,7 @@ warn () { echo "sandbox-venv/wrapper: $*" >&2; }
 command_exists () { command -v "$1" >/dev/null 2>&1; }
 
 venv="$(realpath "${0%/*}/..")"
+proj_dir="$(realpath "$venv/..")"
 
 # Quote args with spaces. Do this here before overriding "$@"
 format_args () {
@@ -83,10 +84,16 @@ split_args_by_lf () {
     printf '%s' "$1" | case "$1" in *$lf*) cat ;; *) tr ' ' '\n' ;; esac
 }
 
+# Support BWRAP_ARGS passed to the process as well as via .env file
+prev_BWRAP_ARGS="${BWRAP_ARGS:-}"
+# Init env from dotenv file
+# shellcheck disable=SC2046
+[ ! -e "$proj_dir/.env" ] || { . "$proj_dir/.env"; export $(grep -Pzo '(?m)^\w*(?==)' "$proj_dir/.env" | tr '\0' '\n'); }
 IFS='
 '  # Split args only on newline
 # shellcheck disable=SC2046
 set -- $(split_args_by_lf "$_BWRAP_DEFAULT_ARGS") \
+       $(split_args_by_lf "${prev_BWRAP_ARGS:-}") \
        $(split_args_by_lf "${BWRAP_ARGS:-}") \
        "${0%/*}/$EXECUTABLE" "$@"
 unset IFS
@@ -231,7 +238,6 @@ mkdir -p "$venv/home" "$venv/cache" "$pip_cache"
 set -- --bind "$venv/cache" "$home/.cache" "$@"
 # RW-bind project dir (dir that contains .venv)
 # but RO-bind some dirs like .venv and git
-proj_dir="$(realpath "$venv/..")"
 ro_bind_pwd_extra="
     ${venv##*/}
     .git"

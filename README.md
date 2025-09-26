@@ -96,13 +96,18 @@ sets up and transparently runs in a secure container sandbox.
 
 Other than the optional virtualenv dir, **all arguments** initially passed to
 `sandbox-venv` are **forwarded to bubblewrap**. See `bubblewrap --help` or
-[`man 1 bwrap`](https://manpages.debian.org/unstable/bwrap). You can also pass additional bubblewrap arguments to individual
+[`man 1 bwrap`](https://manpages.debian.org/unstable/bwrap).
+
+You can also pass additional bubblewrap arguments to individual
 process invocations via **`$BWRAP_ARGS` environment variable**. E.g.:
 
 ```sh
 BWRAP_ARGS='--bind /lib /lib' \
     python -c 'import os; print(os.listdir("/lib"))'
 ```
+
+Note, a **[`.env` file](https://stackoverflow.com/questions/68267862/what-is-an-env-or-dotenv-file-exactly)
+at project root** is sourced for the initial environment.
 
 To run the sandboxed process as **superuser**
 (while still retaining all the security functionality of the container sandbox),
@@ -181,6 +186,7 @@ To pass extra environment variables, other than those filtered by default,
 use `bwrap --setenv`, e.g.:
 ```sh
 BWRAP_ARGS='--setenv OPENAI_API_KEY c4f3b4b3'  my-ai-prog
+# or a .env (dotenv) file
 ```
 
 To run GUI (X11) apps, some prior success was achieved using e.g.:
