@@ -91,11 +91,21 @@ prev_BWRAP_ARGS="${BWRAP_ARGS:-}"
 [ ! -e "$proj_dir/.env" ] || { . "$proj_dir/.env"; export $(grep -Pzo '(?m)^\w*(?==)' "$proj_dir/.env" | tr '\0' '\n'); }
 IFS='
 '  # Split args only on newline
-# shellcheck disable=SC2046
-set -- $(split_args_by_lf "$_BWRAP_DEFAULT_ARGS") \
-       $(split_args_by_lf "${prev_BWRAP_ARGS:-}") \
-       $(split_args_by_lf "${BWRAP_ARGS:-}") \
-       "${0%/*}/$EXECUTABLE" "$@"
+_USER_ARGS="$(split_args_by_lf "$_BWRAP_DEFAULT_ARGS")
+$(split_args_by_lf "${prev_BWRAP_ARGS:-}")
+$(split_args_by_lf "${BWRAP_ARGS:-}")"
+paths_from_args=$(
+    set -f; IFS='
+'
+    # shellcheck disable=SC2086
+    set -- $_USER_ARGS
+    while [ $# -gt 0 ]; do
+        case "$1" in --*bind*) echo "$2" ;; esac
+        shift
+    done
+)
+# shellcheck disable=SC2086
+set -- $_USER_ARGS "${0%/*}/$EXECUTABLE" "$@"
 unset IFS
 
 # Make private temp dir for use as TMPDIR
@@ -222,6 +232,14 @@ collect="$(
     while IFS= read -r path; do
         case $path in "$prev"/*) continue;; esac
         echo "$path"; prev="$path"
+    done |
+    # If user had already --bind /usr, avoid our /usr/lib
+    while IFS= read -r path; do
+        IFS='
+        '; for prefix in $paths_from_args; do
+            case "$path" in "${prefix%/}"/*) continue 2;; esac
+        done
+        echo "$path"
     done)"
 for path in $collect; do set -- --ro-bind "$path" "$path" "$@"; done
 

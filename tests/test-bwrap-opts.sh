@@ -9,11 +9,12 @@ script='print(open("/file").read())'
 
 # Test default args
 python -c "$script" | grep -q 'VERSION'
-pip freeze
 
 # Test args passed via BWRAP_ARGS variable
 export BWRAP_ARGS='--ro-bind /etc/passwd /file'
 python -c "$script" | grep -q 'root:'
-pip freeze
+
+# User-bound paths take precedence
+! VERBOSE=1 BWRAP_ARGS='--ro-bind / /' python -c '' | grep -q '/lib/'
 
 printf '\n\n\n    ALL OK  ✅\n\n\n'
