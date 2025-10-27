@@ -93,6 +93,13 @@ wrap_all () (
     chmod +x "$file"
     echo "$file"
 
+    # Install deactivate_sandbox hook in $venv/bin/activate
+    grep -Fq deactivate_sandbox "$bin/activate" ||
+        cat >> "$bin/activate" <<EOF
+
+deactivate_sandbox () { for f in "$(realpath "$bin")"/.unsafe_*; do mv -vf "\$f" "\${f%/*}/\${f##*/.unsafe_}"; done; }
+EOF
+
     # Install PYTHONPATH=$venv/sandbox with sitecustomize.py
     mkdir -p "$bin/../sandbox"
     extract_segment 3 "$@" > "$bin/../sandbox/sitecustomize.py"
