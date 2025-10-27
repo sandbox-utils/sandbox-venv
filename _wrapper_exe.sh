@@ -316,9 +316,9 @@ bwrap \
     --bind-data 4 /etc/group \
     "$@" \
     5<<EOF 4<<EOF2
-$(getent passwd "$uid" 65534)
+$(getent passwd "$uid" nobody)
 EOF
-$(getent group "$(id -g)" 65534)
+$(getent group "$(id -g)" nogroup adm sudo audio dip video plugdev staff users netdev scanner bluetooth lpadmin bumblebee)
 EOF2
 
 exec 7<&- && wait ${!-}  # Close FD 7, permitting xdg-dbus-proxy to exit
