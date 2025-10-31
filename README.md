@@ -119,10 +119,11 @@ The directory that contains your venv dir, i.e. `.venv/..` or
 while everything else (including `project/.git`)
 is mounted read-only. In addition:
 
-* `"$venv/cache"` is bind-mounted as `"$HOME/.cache"`
+* `"$venv/home"` is bind-mounted as `"$HOME"`,
+* `"$venv/cache"` is bind-mounted as `"$HOME/.cache"`,
 * `"$HOME/.cache/pip"` is bind-mounted as `"$HOME/.cache/pip"`
   (only if environment variable `SANDBOX_USE_PIP_CACHE=` is set as this may
-  enable cache poisoning attachs).
+  enable cache poisoning attacks).
 
 To mount extra endpoints, use Bubblewrap switches `--bind` or `--bind-ro`.
 Anything else not explicitly mounted by an extra CLI switch
@@ -183,6 +184,15 @@ supply it with full _/usr_ and _/lib_:
 BWRAP_ARGS='--ro-bind /usr /usr --ro-bind /lib /lib'  pip install ...
 ```
 
+You *may need* to expose your complex IDE bin/lib dirs.
+For use with JetBrains IDEs such as PyCharm, you need to give the
+sandbox access to the IDE runtime dir. We show this done globally
+at initialization via default args rather than via `$BWRAP_ARGS` variable:
+```sh
+IDE_DIR="/home/my_username/Downloads/pycharm"  # E.g.
+sandbox-venv .venv --ro-bind "$IDE_DIR" "$IDE_DIR"
+```
+
 To pass extra environment variables, other than those filtered by default,
 use `bwrap --setenv`, e.g.:
 ```sh
@@ -197,7 +207,7 @@ e.g. to open privileged ports, use args:
 BWRAP_ARGS='--uid 0 --cap-add cap_net_bind_service'  python -m http.server 80
 ```
 
-To run GUI (X11) apps, some prior success was achieved using e.g.:
+To run **GUI (X11) apps**, some prior success was achieved using e.g.:
 ```sh
 BWRAP_ARGS='--bind /tmp/.X11-unix/X0 /tmp/.X11-unix/X8 --setenv DISPLAY :8' \
     python -m tkinter
