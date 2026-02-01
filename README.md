@@ -178,6 +178,10 @@ To see what's failing, run the sandbox with something like `strace -f -e '%file,
 
 Examples
 --------
+The examples deal in environment variables,
+but once configurations stabilize, you should probably use
+`sandbox-venv` **init params** and **`.env` files**.
+
 To install a heavy package that requires a compiler, it is often easiest to
 supply it with full _/usr_ and _/lib_:
 ```sh
@@ -187,7 +191,7 @@ BWRAP_ARGS='--ro-bind /usr /usr --ro-bind /lib /lib'  pip install ...
 You *may need* to expose your complex IDE bin/lib dirs.
 For use with JetBrains IDEs such as PyCharm, you need to give the
 sandbox access to the IDE runtime dir. We show this done globally
-at initialization via default args rather than via `$BWRAP_ARGS` variable:
+at **initialization via default args** rather than via `$BWRAP_ARGS` variable:
 ```sh
 IDE_DIR="/home/my_username/Downloads/pycharm"  # E.g.
 sandbox-venv .venv --ro-bind "$IDE_DIR" "$IDE_DIR"
