@@ -40,4 +40,6 @@ if [ "$new_binaries" ]; then
     fi
 fi
 
+rm -fv "$venv/sandbox/sandbox-venv.cache"
+
 exit $pip_return_status

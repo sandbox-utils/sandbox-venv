@@ -194,57 +194,68 @@ fi
 case $- in *x*) xtrace=-x ;; *) xtrace=+x ;; esac; set +x
 
 # Collect binaries' lib dependencies
-for exe in readelf ldd; do command_exists "$exe" || { warn "Missing executable: $exe"; exit 1; }; done
-lib_deps () {
-    readelf -l "$1" >/dev/null 2>&1 || return 0  # Not a binary file
-    readelf -l "$1" | awk '/interpreter/ {print $NF}' | tr -d '[]'
-    ldd "$1" | awk '/=>/ { print $3 }' | grep -F -v "$venv" | grep -E '^/' || true
-}
-collect="$executables"
-for exe in $executables; do
-    collect="$collect
-        $(lib_deps "$exe")"
-done
-root_so_lib_dirs="
-    /usr/lib/python3*/lib-dynload
-    /usr/lib64/python3*/lib-dynload"
-# XXX: If some `git` tools are failing, add $(find /usr/lib/git-core -type f)
-for exe in $(find "$venv/lib" $root_so_lib_dirs -name '*.so' 2>/dev/null || true); do
-    collect="$collect
-        $(lib_deps "$exe")"
-done
+cache_file="$venv/sandbox/sandbox-venv.cache"
+if [ -f "$cache_file" ]; then
+    collect="$(cat "$cache_file")"
+else
+    warn 'Caching dependencies ... (Simply rerun pip to clear the cache.)'
 
-# Filter collect, warn on non-existant paths, unique sort, cull.
-# Use separate for-loop to expand globstar.
-prev="sandbox@"
-collect="
-    $collect
-    $ro_bind_extra
-    $seccomp_libs
-    $git_libs
-    $py_libs"
-collect="$(
-    for path in $collect; do
-        [ -e "$path" ] ||
-            # Don't warn for globstar paths as they are allowed to not match
-            case "$path" in *\**) continue ;; *) warn "Warning: missing $path"; continue ;; esac
-        echo "$path"
-    done |
-    sort -u |
-    # If collected paths contain /foo/ and /foo/bar,
-    # keep only /foo since it covers both
-    while IFS= read -r path; do
-        case $path in "$prev"/*) continue;; esac
-        echo "$path"; prev="$path"
-    done |
-    # If user had already --bind /usr, avoid our /usr/lib
-    while IFS= read -r path; do
-        IFS='
-        '; for prefix in $paths_from_args; do
-            case "$path" in "${prefix%/}"/*) continue 2;; esac
-        done
-        echo "$path"
-    done)"
+    for exe in readelf ldd; do command_exists "$exe" || { warn "Missing executable: $exe"; exit 1; }; done
+    lib_deps () {
+        readelf -l "$1" >/dev/null 2>&1 || return 0  # Not a binary file
+        readelf -l "$1" | awk '/interpreter/ {print $NF}' | tr -d '[]'
+        ldd "$1" | awk '/=>/ { print $3 }' | grep -F -v "$venv" | grep -E '^/' || true
+    }
+    collect="$executables"
+    for exe in $executables; do
+        collect="$collect
+            $(lib_deps "$exe")"
+    done
+    root_so_lib_dirs="
+        /usr/lib/python3*/lib-dynload
+        /usr/lib64/python3*/lib-dynload"
+    # XXX: If some `git` tools are failing, add $(find /usr/lib/git-core -type f)
+    for exe in $(find "$venv/lib" $root_so_lib_dirs -name '*.so' 2>/dev/null || true); do
+        collect="$collect
+            $(lib_deps "$exe")"
+    done
+
+    # Filter collect, warn on non-existant paths, unique sort, cull.
+    # Use separate for-loop to expand globstar.
+    prev="sandbox@"
+    collect="
+        $collect
+        $ro_bind_extra
+        $seccomp_libs
+        $git_libs
+        $py_libs"
+
+    collect="$(
+        for path in $collect; do
+            [ -e "$path" ] ||
+                # Don't warn for globstar paths as they are allowed to not match
+                case "$path" in *\**) continue ;; *) warn "Warning: missing $path"; continue ;; esac
+            echo "$path"
+        done |
+        sort -u |
+        # If collected paths contain /foo/ and /foo/bar,
+        # keep only /foo since it covers both
+        while IFS= read -r path; do
+            case $path in "$prev"/*) continue;; esac
+            echo "$path"; prev="$path"
+        done |
+        # If user had already --bind /usr, avoid our /usr/lib
+        while IFS= read -r path; do
+            IFS='
+            '; for prefix in $paths_from_args; do
+                case "$path" in "${prefix%/}"/*) continue 2;; esac
+            done
+            echo "$path"
+        done)"
+
+    mkdir -p "${cache_file%/*}"
+    echo "$collect" > "$cache_file"
+fi
 for path in $collect; do set -- --ro-bind "$path" "$path" "$@"; done
 
 # RW bind $HOME and cache dirs for downloads etc.

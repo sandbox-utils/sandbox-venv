@@ -93,6 +93,8 @@ wrap_all () (
     chmod +x "$file"
     echo "$file"
 
+    rm -fv "$venv/sandbox/sandbox-venv.cache"
+
     # Install deactivate_sandbox hook in $venv/bin/activate
     grep -Fq deactivate_sandbox "$bin/activate" ||
         cat >> "$bin/activate" <<EOF

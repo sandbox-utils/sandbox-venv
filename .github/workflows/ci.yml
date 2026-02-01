@@ -31,6 +31,7 @@ jobs:
       - run: time bash tests/test-env-vars.sh
       - run: time bash tests/test-expose-home.sh
       - run: time bash tests/test-idempotent.sh
+      - run: time bash tests/test-perf-cache.sh
 
   workflow-keepalive:
     if: github.event_name == 'schedule'
