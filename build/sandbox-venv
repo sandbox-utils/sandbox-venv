@@ -71,15 +71,13 @@ wrap_all () (
     for file in "$bin"/*; do
         # shellcheck disable=SC2015
         [ -f "$file" ] && [ -x "$file" ] || continue
-        ! is_already_wrapped "$file" || continue
+        [ "${file##*/}" != 'shell' ] || continue  # Skip our bin/shell
         case "${file##*/}" in pip*) ;; *) ! is_python_shebang "$file" || continue ;; esac  # Skip if wrapped transitively, except pip
         # shellcheck disable=SC2015
         [ -L "$file" ] && case "$(readlink "$file")" in /*) ;; *) continue ;; esac || true  # Skip relative symlinks
 
         unsafe_file="$bin/.unsafe_${file##*/}"
-        if ! is_already_wrapped "$file" && [ "${file##*/}" != 'shell' ]; then
-            mv -v "$file" "$unsafe_file"
-        fi
+        if [ ! -e "$unsafe_file" ]; then mv -v "$file" "$unsafe_file"; fi
 
         case "${file##*/}" in
             pip|pip3*) wrap_pip "$file" "$@" ;;
@@ -90,10 +88,19 @@ wrap_all () (
     done
 
     # Install $venv/bin/shell
-    file="$(realpath "$bin/shell")"
+    file="$bin/shell"
     add_bin_shell "$file"
     chmod +x "$file"
     echo "$file"
+
+    rm -fv "$venv/sandbox/sandbox-venv.cache"
+
+    # Install deactivate_sandbox hook in $venv/bin/activate
+    grep -Fq deactivate_sandbox "$bin/activate" ||
+        cat >> "$bin/activate" <<EOF
+
+deactivate_sandbox () { for f in "$(realpath "$bin")"/.unsafe_*; do mv -vf "\$f" "\${f%/*}/\${f##*/.unsafe_}"; done; }
+EOF
 
     # Install PYTHONPATH=$venv/sandbox with sitecustomize.py
     mkdir -p "$bin/../sandbox"
@@ -147,6 +154,8 @@ if [ "$new_binaries" ]; then
     fi
 fi
 
+rm -fv "$venv/sandbox/sandbox-venv.cache"
+
 exit $pip_return_status
 
 
@@ -161,6 +170,7 @@ warn () { echo "sandbox-venv/wrapper: $*" >&2; }
 command_exists () { command -v "$1" >/dev/null 2>&1; }
 
 venv="$(realpath "${0%/*}/..")"
+proj_dir="$(realpath "$venv/..")"
 
 # Quote args with spaces. Do this here before overriding "$@"
 format_args () {
@@ -191,6 +201,9 @@ executables="
     /bin/env
     /bin/ls
     /bin/sh
+    /bin/cat
+    /bin/stat
+    /usr/bin/realpath
 
     /bin/uname
     /sbin/ldconfig*
@@ -214,9 +227,10 @@ ro_bind_extra="
     /etc/hosts
     /etc/resolv.conf
 
-    /etc/ld.so.cache
+    /etc/ld.so.*
     /etc/os-release
     /usr/share/locale
+    /usr/share/i18n
     /usr/share/zoneinfo
     /etc/localtime
     /etc/timezone
@@ -236,12 +250,28 @@ split_args_by_lf () {
     printf '%s' "$1" | case "$1" in *$lf*) cat ;; *) tr ' ' '\n' ;; esac
 }
 
+# Support BWRAP_ARGS passed to the process as well as via .env file
+prev_BWRAP_ARGS="${BWRAP_ARGS:-}"
+# Init env from dotenv file
+# shellcheck disable=SC2046
+[ ! -e "$proj_dir/.env" ] || { . "$proj_dir/.env"; export $(grep -Pzo '(?m)^\w*(?==)' "$proj_dir/.env" | tr '\0' '\n'); }
 IFS='
 '  # Split args only on newline
-# shellcheck disable=SC2046
-set -- $(split_args_by_lf "$_BWRAP_DEFAULT_ARGS") \
-       $(split_args_by_lf "${BWRAP_ARGS:-}") \
-       "${0%/*}/$EXECUTABLE" "$@"
+_USER_ARGS="$(split_args_by_lf "$_BWRAP_DEFAULT_ARGS")
+$(split_args_by_lf "${prev_BWRAP_ARGS:-}")
+$(split_args_by_lf "${BWRAP_ARGS:-}")"
+paths_from_args=$(
+    set -f; IFS='
+'
+    # shellcheck disable=SC2086
+    set -- $_USER_ARGS
+    while [ $# -gt 0 ]; do
+        case "$1" in --*bind*) echo "$2" ;; esac
+        shift
+    done
+)
+# shellcheck disable=SC2086
+set -- $_USER_ARGS "${0%/*}/$EXECUTABLE" "$@"
 unset IFS
 
 # Make private temp dir for use as TMPDIR
@@ -284,14 +314,14 @@ pth='/org/freedesktop/portal/desktop'
 service='org.freedesktop.portal.Desktop'
 interface='org.freedesktop.portal.OpenURI'
 method='OpenURI'
-dbus-send --bus="\$address" --type method_call --dest=\$service \$pth \$interface.\$method \
-    string: string:"\$1" dict:string:variant: \
-||
 gdbus call --address "\$address" --dest \$service --object-path \$pth --method \$interface.\$method \
     '' "\$1" '{}' >/dev/null \
 ||
 busctl --verbose --address "\$address" call \$service \$pth \$interface \$method \
-    'ssa{sv}' '' "\$1" 0
+    'ssa{sv}' '' "\$1" 0 \
+||
+dbus-send --bus="\$address" --type method_call --dest=\$service \$pth \$interface.\$method \
+    string: string:"\$1" dict:string:variant:
 EOF
     exec 6<<EOF
 [Instance]
@@ -326,49 +356,68 @@ fi
 case $- in *x*) xtrace=-x ;; *) xtrace=+x ;; esac; set +x
 
 # Collect binaries' lib dependencies
-for exe in readelf ldd; do command_exists "$exe" || { warn "Missing executable: $exe"; exit 1; }; done
-lib_deps () {
-    readelf -l "$1" >/dev/null 2>&1 || return 0  # Not a binary file
-    readelf -l "$1" | awk '/interpreter/ {print $NF}' | tr -d '[]'
-    ldd "$1" | awk '/=>/ { print $3 }' | grep -F -v "$venv" | grep -E '^/' || true
-}
-collect="$executables"
-for exe in $executables; do
-    collect="$collect
-        $(lib_deps "$exe")"
-done
-root_so_lib_dirs="
-    /usr/lib/python3*/lib-dynload
-    /usr/lib64/python3*/lib-dynload"
-# XXX: If some `git` tools are failing, add $(find /usr/lib/git-core -type f)
-for exe in $(find "$venv/lib" $root_so_lib_dirs -name '*.so' 2>/dev/null || true); do
-    collect="$collect
-        $(lib_deps "$exe")"
-done
+cache_file="$venv/sandbox/sandbox-venv.cache"
+if [ -f "$cache_file" ]; then
+    collect="$(cat "$cache_file")"
+else
+    warn 'Caching dependencies ... (Simply rerun pip to clear the cache.)'
 
-# Filter collect, warn on non-existant paths, unique sort, cull.
-# Use separate for-loop to expand globstar.
-prev="sandbox@"
-collect="
-    $collect
-    $ro_bind_extra
-    $seccomp_libs
-    $git_libs
-    $py_libs"
-collect="$(
-    for path in $collect; do
-        [ -e "$path" ] ||
-            # Don't warn for globstar paths as they are allowed to not match
-            case "$path" in *\**) continue ;; *) warn "Warning: missing $path"; continue ;; esac
-        echo "$path"
-    done |
-    sort -u |
-    # If collected paths contain /foo/ and /foo/bar,
-    # keep only /foo since it covers both
-    while IFS= read -r path; do
-        case $path in "$prev"/*) continue;; esac
-        echo "$path"; prev="$path"
-    done)"
+    for exe in readelf ldd; do command_exists "$exe" || { warn "Missing executable: $exe"; exit 1; }; done
+    lib_deps () {
+        readelf -l "$1" >/dev/null 2>&1 || return 0  # Not a binary file
+        readelf -l "$1" | awk '/interpreter/ {print $NF}' | tr -d '[]'
+        ldd "$1" | awk '/=>/ { print $3 }' | grep -F -v "$venv" | grep -E '^/' || true
+    }
+    collect="$executables"
+    for exe in $executables; do
+        collect="$collect
+            $(lib_deps "$exe")"
+    done
+    root_so_lib_dirs="
+        /usr/lib/python3*/lib-dynload
+        /usr/lib64/python3*/lib-dynload"
+    # XXX: If some `git` tools are failing, add $(find /usr/lib/git-core -type f)
+    for exe in $(find "$venv/lib" $root_so_lib_dirs -name '*.so' 2>/dev/null || true); do
+        collect="$collect
+            $(lib_deps "$exe")"
+    done
+
+    # Filter collect, warn on non-existant paths, unique sort, cull.
+    # Use separate for-loop to expand globstar.
+    prev="sandbox@"
+    collect="
+        $collect
+        $ro_bind_extra
+        $seccomp_libs
+        $git_libs
+        $py_libs"
+
+    collect="$(
+        for path in $collect; do
+            [ -e "$path" ] ||
+                # Don't warn for globstar paths as they are allowed to not match
+                case "$path" in *\**) continue ;; *) warn "Warning: missing $path"; continue ;; esac
+            echo "$path"
+        done |
+        sort -u |
+        # If collected paths contain /foo/ and /foo/bar,
+        # keep only /foo since it covers both
+        while IFS= read -r path; do
+            case $path in "$prev"/*) continue;; esac
+            echo "$path"; prev="$path"
+        done |
+        # If user had already --bind /usr, avoid our /usr/lib
+        while IFS= read -r path; do
+            IFS='
+            '; for prefix in $paths_from_args; do
+                case "$path" in "${prefix%/}"/*) continue 2;; esac
+            done
+            echo "$path"
+        done)"
+
+    mkdir -p "${cache_file%/*}"
+    echo "$collect" > "$cache_file"
+fi
 for path in $collect; do set -- --ro-bind "$path" "$path" "$@"; done
 
 # RW bind $HOME and cache dirs for downloads etc.
@@ -384,7 +433,6 @@ mkdir -p "$venv/home" "$venv/cache" "$pip_cache"
 set -- --bind "$venv/cache" "$home/.cache" "$@"
 # RW-bind project dir (dir that contains .venv)
 # but RO-bind some dirs like .venv and git
-proj_dir="$(realpath "$venv/..")"
 ro_bind_pwd_extra="
     ${venv##*/}
     .git"
@@ -445,9 +493,9 @@ bwrap \
     --bind-data 4 /etc/group \
     "$@" \
     5<<EOF 4<<EOF2
-$(getent passwd "$uid" 65534)
+$(getent passwd "$uid" nobody)
 EOF
-$(getent group "$(id -g)" 65534)
+$(getent group "$(id -g)" nogroup adm sudo audio dip video plugdev staff users netdev scanner bluetooth lpadmin bumblebee)
 EOF2
 
 exec 7<&- && wait ${!-}  # Close FD 7, permitting xdg-dbus-proxy to exit
@@ -564,12 +612,11 @@ if allow_syscalls:
         try:
             import pyseccomp as seccomp
         except ImportError:
+            # sandbox-venv/seccomp: Python package 'seccomp' (or 'pyseccomp')
+            # not available. If you want seccomp support, apt install python3-seccomp
+            # (requires venv created with --system-site-packages)
+            # or pip install pyseccomp.
             seccomp = None
-            if sys.platform.startswith('linux'):
-                print("sandbox-venv/seccomp: Python package 'seccomp' (or 'pyseccomp') "
-                      "not available. If you want seccomp support, apt install python3-seccomp "
-                      "(requires venv created with --system-site-packages) "
-                      "or pip install pyseccomp.", file=sys.stderr)
     if seccomp:
         print(f'sandbox-venv/seccomp: allowing {len(allow_syscalls)} syscalls', file=sys.stderr)
         default_action = seccomp.ERRNO(seccomp.errno.EPERM)  # EPERM, Operation not permitted
