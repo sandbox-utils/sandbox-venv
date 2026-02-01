@@ -282,23 +282,25 @@ Viable alternatives
    and manual management of their runtime. This comes free when the
    worked on project itself deals in
    [Continerfiles](https://manpages.debian.org/unstable/Containerfile). 
-2. On Linux, [AppArmor](https://apparmor.net), even with
+2. [`sandbox-run`](https://github.com/sandbox-utils/sandbox-run),
+   a similar bubblewrap-based shell script to sandbox arbitrary executables.
+3. On Linux, [AppArmor](https://apparmor.net), even with
    [apparmor.d](https://github.com/roddhjav/apparmor.d)
    applied, doesn't ship a generic `python` profile, so one would go
    through explicit `aa-exec --profile my-custom-env`, but writing
    custom AppArmor profiles is less common than simply using containers.
-3. [Firejail](https://github.com/netblue30/firejail/).
+4. [Firejail](https://github.com/netblue30/firejail/).
    An indie C project with virtually no dependencies (which
    [<del>Red Hat</del><ins>IBM</ins> has a perfectly ]reasonable position on](https://github.com/containers/bubblewrap?tab=readme-ov-file#related-project-comparison-firejail))
    that sets up its own sandbox. I guess it's a matter of trust.
    Similarly to AppArmor, requires writing a custom profile.
-4. A custom
+5. A custom
    [`seccomp` initialization script](https://healeycodes.com/running-untrusted-python-code),
    executed at interpreter startup using
    [~~`PYTHONSTARTUP=`~~](https://docs.python.org/3/using/cmdline.html#envvar-PYTHONSTARTUP)
    [`sitecustomize`](https://docs.python.org/3/library/site.html#module-sitecustomize)
    startup hook.
-5. On macOS, [`sandbox-exec`](https://igorstechnoclub.com/sandbox-exec/)
+6. On macOS, [`sandbox-exec`](https://igorstechnoclub.com/sandbox-exec/)
    or Apple Containerization®.
 
 In comparison to the above, `sandbox-venv` is like `chroot` on steroids.
