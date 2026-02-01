@@ -39,6 +39,9 @@ executables="
     /bin/env
     /bin/ls
     /bin/sh
+    /bin/cat
+    /bin/stat
+    /usr/bin/realpath
 
     /bin/uname
     /sbin/ldconfig*
@@ -62,9 +65,10 @@ ro_bind_extra="
     /etc/hosts
     /etc/resolv.conf
 
-    /etc/ld.so.cache
+    /etc/ld.so.*
     /etc/os-release
     /usr/share/locale
+    /usr/share/i18n
     /usr/share/zoneinfo
     /etc/localtime
     /etc/timezone
