@@ -108,12 +108,11 @@ if allow_syscalls:
         try:
             import pyseccomp as seccomp
         except ImportError:
+            # sandbox-venv/seccomp: Python package 'seccomp' (or 'pyseccomp')
+            # not available. If you want seccomp support, apt install python3-seccomp
+            # (requires venv created with --system-site-packages)
+            # or pip install pyseccomp.
             seccomp = None
-            if sys.platform.startswith('linux'):
-                print("sandbox-venv/seccomp: Python package 'seccomp' (or 'pyseccomp') "
-                      "not available. If you want seccomp support, apt install python3-seccomp "
-                      "(requires venv created with --system-site-packages) "
-                      "or pip install pyseccomp.", file=sys.stderr)
     if seccomp:
         print(f'sandbox-venv/seccomp: allowing {len(allow_syscalls)} syscalls', file=sys.stderr)
         default_action = seccomp.ERRNO(seccomp.errno.EPERM)  # EPERM, Operation not permitted
