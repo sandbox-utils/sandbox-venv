@@ -152,14 +152,14 @@ pth='/org/freedesktop/portal/desktop'
 service='org.freedesktop.portal.Desktop'
 interface='org.freedesktop.portal.OpenURI'
 method='OpenURI'
-dbus-send --bus="\$address" --type method_call --dest=\$service \$pth \$interface.\$method \
-    string: string:"\$1" dict:string:variant: \
-||
 gdbus call --address "\$address" --dest \$service --object-path \$pth --method \$interface.\$method \
     '' "\$1" '{}' >/dev/null \
 ||
 busctl --verbose --address "\$address" call \$service \$pth \$interface \$method \
-    'ssa{sv}' '' "\$1" 0
+    'ssa{sv}' '' "\$1" 0 \
+||
+dbus-send --bus="\$address" --type method_call --dest=\$service \$pth \$interface.\$method \
+    string: string:"\$1" dict:string:variant:
 EOF
     exec 6<<EOF
 [Instance]
