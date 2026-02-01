@@ -20,6 +20,8 @@ $(split_args_by_lf "${BWRAP_ARGS-}")" \
     "$venv/bin/.unsafe_${0##*/}" "$@"
 pip_return_status=$?
 
+rm -f "$venv/cache/sandbox-venv.cache"
+
 new_binaries="$(
     for file in "$venv/bin"/*; do
         [ -L "$file" ] || [ -d "$file" ] || [ ! -x "$file" ] ||

@@ -68,6 +68,7 @@ EOF
 }
 
 wrap_all () (
+    rm -f "$bin/../cache/sandbox-venv.cache"
     for file in "$bin"/*; do
         # shellcheck disable=SC2015
         [ -f "$file" ] && [ -x "$file" ] || continue
