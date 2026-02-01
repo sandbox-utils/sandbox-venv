@@ -15,6 +15,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: shellcheck -S warning *.sh
       - run: sudo apt-get remove man-db
+      - run: sudo apt-get remove php*  # Slow to restart with the next step
       - run: |
           # https://github.com/DevToys-app/DevToys/issues/1373
           sudo apt-get update && sudo apt-get install apparmor-profiles
