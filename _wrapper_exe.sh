@@ -64,12 +64,14 @@ git_libs="
 ro_bind_extra="
     /etc/hosts
     /etc/resolv.conf
+    /etc/alternatives
 
     /etc/ld.so.*
     /etc/os-release
     /usr/share/locale
     /usr/share/i18n
     /usr/share/zoneinfo
+    /usr/share/terminfo
     /etc/localtime
     /etc/timezone
 
