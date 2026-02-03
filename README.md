@@ -178,9 +178,9 @@ To see what's failing, run the sandbox with something like `strace -f -e '%file,
 
 Examples
 --------
-The examples deal in environment variables,
+The examples here deal in environment variables,
 but once configurations stabilize, you should probably use
-`sandbox-venv` **init params** and **`.env` files**.
+`sandbox-venv` **init params** and/or **`.env` files**.
 
 To install a heavy package that requires a compiler, it is often easiest to
 supply it with full _/usr_ and _/lib_:
@@ -224,21 +224,24 @@ Security Model
 Entrypoints in `$venv/bin` are wrapped with `exec bwrap`
 so that every invocation runs inside a **fresh** Bubblewrap container.
 
-In addition, `$venv/bin/pip` wrapper re-wraps any newly created **executables** in `$venv/bin`,
+In addition, `$venv/bin/pip` wrapper re-wraps any **newly installed executables** in `$venv/bin`,
 ensuring they always use the wrapped `$venv/bin/python`.
 
 Rather than giving the sandbox full filesystem access,
-minimal shared library (`*.so`) dependencies are collected and made available inside the container,
-as well as specific host binaries (e.g. `/usr/bin/python3`, `/usr/bin/git`, `/bin/sh` etc.).
-Most paths are bind-mounted RO, while the project directory
-(sans its `.venv`, `.git`) is mounted with RW permissions.
+minimal shared library (`*.so`) dependencies,
+as well as specific host binaries (e.g. `/usr/bin/python3`, `/usr/bin/git`, `/bin/sh` etc.),
+are collected and made available inside the container.
+**Most paths are bind-mounted read-only**, while the **current working directory**
+is mounted with **RW** permissions (with the exclusion of
+directories `.venv` and `.git`, which are layered over RO so as to not allow
+the sandboxed executable to modify them directly).
 
-Optionally, a seccomp filter is installed at Python startup using the `sitecustomize` mechanism.
+**`BWRAP_ARGS=`** environment variable lets you **expand or relax the sandbox** at runtime.
 
-`BWRAP_ARGS=` environment variable lets you extend or relax the sandbox at runtime.
+Additional [confinement with `seccomp` is available](#linux-seccomp).
 
 **Paths inside the sandbox mirror the host paths**, potentially exposing your username,
-directory layout etc. This was done for simplicity—pull requests greatly appreciated!
+directory layout etc. This was done for simplicity—pull requests to solve paths anonymization are greatly appreciated!
 
 ```mermaid
 flowchart TB
@@ -276,8 +279,8 @@ Contributing
 You see a mistake—you fix it. Thanks!
 
 
-Viable alternatives
--------------------
+Alternatives
+------------
 1. A popular alternative are the aforementioned Docker/OCI containers
    and manual management of their runtime. This comes free when the
    worked on project itself deals in
@@ -291,7 +294,7 @@ Viable alternatives
    custom AppArmor profiles is less common than simply using containers.
 4. [Firejail](https://github.com/netblue30/firejail/).
    An indie C project with virtually no dependencies (which
-   [<del>Red Hat</del><ins>IBM</ins> has a perfectly ]reasonable position on](https://github.com/containers/bubblewrap?tab=readme-ov-file#related-project-comparison-firejail))
+   [<del>Red Hat</del><ins>IBM</ins> has a perfectly reasonable position on](https://github.com/containers/bubblewrap?tab=readme-ov-file#related-project-comparison-firejail))
    that sets up its own sandbox. I guess it's a matter of trust.
    Similarly to AppArmor, requires writing a custom profile.
 5. A custom
